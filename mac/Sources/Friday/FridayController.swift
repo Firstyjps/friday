@@ -267,13 +267,16 @@ final class FridayController: ObservableObject {
         case .inputText(let t):
             if let i = meIndex { messages[i].text += t } else { messages.append(.init(kind: .me, text: t)); meIndex = messages.count - 1 }
             friIndex = nil
-            if meIndex == messages.count - 1 { userTurn = messages[meIndex!].text }
+            userTurn += t
             for k in confirms.keys { confirms[k]?.heard += t }     // เก็บเสียงผู้ใช้หลังถามยืนยัน
         case .outputText(let t):
             friTurn += t
             if let i = friIndex { messages[i].text += t } else { messages.append(.init(kind: .fri, text: t)); friIndex = messages.count - 1 }
             meIndex = nil
         case .turnComplete:
+            // บันทึกบทสนทนาที่คุยกับ Friday จริง (หลังปลุกแล้วเท่านั้น — เสียงที่ได้ยินทั่วไปไม่ถูกบันทึก)
+            if !userTurn.isEmpty { Log.chat("🧑 \(userTurn)") }
+            if !friTurn.isEmpty { Log.chat("🤖 \(friTurn)") }
             meIndex = nil; friIndex = nil
             // ตัวสำรอง: ผู้ใช้พูดคำลาแต่ Gemini ไม่เรียก end_conversation → ปิดเองหลัง Friday พูดจบ
             if !ending, friTurn.contains("stop_listening") { endAfterSpeech(mute: true) }

@@ -136,7 +136,8 @@ const view = (j) => ({ id: j.id, status: j.status, result: j.result, task: j.tas
 // ---------- คำปลุก (โหมดห้อง) ----------
 // หน้าเว็บส่งเสียงช่วงที่มีคนพูด (PCM16 16kHz mono) มา → whisper-server ในเครื่องถอดความ → เช็คคำว่า Friday
 const WHISPER = process.env.WHISPER_URL || 'http://127.0.0.1:4851/inference';
-const WAKE = /ฟรายเด|ไฟรเด|ฟายเด|ไฟร์เด|ฟรายเด้|ไฟเดย์|fri\s*day/i;
+// ต้องเป็นคำแรกของประโยค (ยอมให้มีคำทักนำหน้าได้ เช่น "เฮ้ Friday") — กันตื่นตอนแค่พูดถึง Friday กลางประโยค
+const WAKE = /^[\s,.!?"'“”…-]*(?:(?:hey|hi|ok|okay|เฮ้|เฮ|หวัดดี|สวัสดี|โอเค|นี่|เอ่อ|อ่า)[\s,]*)?(ฟรายเด|ไฟรเด|ฟายเด|ไฟร์เด|ฟรายเด้|ไฟเดย์|fri\s*day)/i;
 
 function pcmToWav(pcm) {
   const h = Buffer.alloc(44);
@@ -153,7 +154,8 @@ async function detectWake(pcm) {
   form.append('response_format', 'json');
   const r = await fetch(WHISPER, { method: 'POST', body: form });
   const text = ((await r.json()).text || '').trim();
-  return { text, wake: WAKE.test(text) };
+  const m = text.match(WAKE);
+  return { text, wake: !!m, phrase: m ? m[0].trim() : '' };
 }
 
 // ---------- หูเบื้องหลัง: ฟังคำปลุกตอนหน้าต่าง Friday ปิดอยู่ → เปิดหน้าต่างขึ้นมาเอง ----------
@@ -230,7 +232,7 @@ function startEar() {
     busy = true;
     try {
       const r = await detectWake(clip);
-      if (r.wake) log(`ear WAKE | ${r.text}`);
+      if (r.wake) log(`ear WAKE | ${r.phrase}`);
       if (r.wake && !roomAlive()) {
         pendingWakeAt = Date.now(); earCooldownUntil = Date.now() + 15000;
         spawn('/usr/bin/open', ['-a', join(HOME, 'Applications/Friday.app')]);
@@ -280,7 +282,7 @@ http.createServer(async (req, res) => {
       }
       if (req.method === 'POST' && url.pathname === '/api/wake') {
         const r = await detectWake(await readRaw(req));
-        if (r.wake) log(`WAKE | ${r.text}`);   // ไม่บันทึกประโยคอื่นที่ไมค์ได้ยิน (ความเป็นส่วนตัว)
+        if (r.wake) log(`WAKE | ${r.phrase}`);   // เก็บแค่คำปลุก ไม่เก็บประโยคที่ได้ยิน (บทสนทนากับ Friday จริงๆ log แยกในแอป)
         return json(res, 200, r);
       }
       if (req.method === 'POST' && url.pathname === '/api/mac') {

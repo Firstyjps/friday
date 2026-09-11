@@ -33,7 +33,8 @@ LaunchAgent `com.kron.friday-room` เปิด Friday.app ตอน login
 cd ~/Desktop/FRIDAY/mac && ./build.sh                          # build + ติดตั้งแอปใหม่
 $(swift build -c release --show-bin-path)/Friday --selftest     # ทดสอบ Gemini Live โดยไม่ใช้ไมค์
 launchctl kickstart -k gui/$(id -u)/com.kron.friday            # รีสตาร์ท server
-tail -f ~/logs/friday.log                                       # WAKE/hear/JOB/ping
+tail -f ~/logs/friday.log                                       # WAKE (คำปลุก) / JOB / ping
+tail -f ~/logs/friday-chat.log                                  # บทสนทนากับ Friday (หลังปลุกเท่านั้น)
 ```
 
 ## หมายเหตุ

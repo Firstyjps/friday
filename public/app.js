@@ -176,7 +176,12 @@ async function confirmTask(fc) {
   session?.sendToolResponse({ functionResponses: [{ id: fc.id, name: fc.name, response: resp }] });
 }
 
+let activeJobs = 0;                          // งานที่ยังรอผล (โหมดห้องจะไม่ปิด session ระหว่างนี้)
 async function pollJob(id, card) {
+  activeJobs++;
+  try { await pollUntilDone(id, card); } finally { activeJobs--; }
+}
+async function pollUntilDone(id, card) {
   while (true) {
     await new Promise((r) => setTimeout(r, 3000));
     let job; try { job = await api(`/api/mac/${id}`); } catch { continue; }
@@ -211,8 +216,13 @@ function onMessage(msg) {
   if (sc?.turnComplete) { meBubble = null; friBubble = null; setTimeout(flushResults, 800); }
 }
 
-async function start() {
-  setStatus('กำลังเชื่อมต่อ…');
+
+// ---------- audio pipeline (ไมค์ + ลำโพง) — แยกจาก Gemini session เพื่อให้โหมดห้องฟังคำปลุกได้ตลอด ----------
+const ROOM = new URLSearchParams(location.search).has('room');
+let micNode = null, lastActivity = 0;
+const idleMs = 20000;                          // โหมดห้อง: เงียบเกินนี้ → ปิด session กลับไปรอคำปลุก
+
+async function openAudio() {
   // เปิดไมค์ก่อน: iOS/WebKit ยอมให้เล่นเสียงโดยไม่ต้องแตะจอ ถ้าหน้าเว็บกำลังใช้ไมค์อยู่
   micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 } });
   outCtx = new AudioContext();
@@ -223,53 +233,132 @@ async function start() {
     new Promise((r) => setTimeout(() => r(false), 1500)),
   ]);
   if (!resumed) throw new Error(NEEDS_TAP);
-  const { token } = await api('/api/token', {});
-
-  const ai = new GoogleGenAI({ apiKey: token, httpOptions: { apiVersion: 'v1alpha' } });
-  session = await ai.live.connect({
-    model: MODEL,
-    config: {
-      responseModalities: [Modality.AUDIO],
-      systemInstruction: SYSTEM,
-      tools: TOOLS,
-      inputAudioTranscription: {},
-      outputAudioTranscription: {},
-      contextWindowCompression: { slidingWindow: {} },
-    },
-    callbacks: {
-      onopen: () => { setStatus('ฟังอยู่… พูดได้เลย'); orb.classList.add('live'); },
-      onmessage: onMessage,
-      onerror: (e) => { bubble('sys', 'error: ' + (e.message || e)); },
-      onclose: (e) => { bubble('sys', 'ปิดการเชื่อมต่อ' + (e.reason ? ': ' + e.reason : '')); stop(); },
-    },
-  });
-
   await micCtx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], { type: 'text/javascript' })));
-  const node = new AudioWorkletNode(micCtx, 'mic');
-  node.port.onmessage = (e) => session?.sendRealtimeInput({ audio: { data: toB64(e.data), mimeType: 'audio/pcm;rate=16000' } });
-  micCtx.createMediaStreamSource(micStream).connect(node);
+  micNode = new AudioWorkletNode(micCtx, 'mic');
+  micNode.port.onmessage = (e) => onMicChunk(e.data);
+  micCtx.createMediaStreamSource(micStream).connect(micNode);
 }
 
-function stop() {
-  const s = session; session = null; try { s?.close(); } catch {}
-  micStream?.getTracks().forEach((t) => t.stop()); micStream = null;
+function closeAudio() {
+  micStream?.getTracks().forEach((t) => t.stop()); micStream = null; micNode = null;
   micCtx?.close(); micCtx = null; stopPlayback(); outCtx?.close(); outCtx = null;
-  orb.classList.remove('live'); setStatus('แตะวงกลมเพื่อเริ่มคุย');
 }
 
+// ไมค์ทุก ~100ms: มี session → ส่ง Gemini · กำลังต่อ → เก็บคิว · โหมดห้องไม่มี session → ตรวจคำปลุก
+let connecting = false; const connectQueue = [];
+function onMicChunk(buf) {
+  if (session && !connecting) return sendAudio(buf);
+  if (connecting) return connectQueue.push(buf);
+  if (ROOM) wakeListen(buf);
+}
+const sendAudio = (buf) => session?.sendRealtimeInput({ audio: { data: toB64(buf), mimeType: 'audio/pcm;rate=16000' } });
+
+// ---------- Gemini session ----------
+async function openSession(prebuffer = []) {
+  connecting = true; connectQueue.push(...prebuffer);
+  setStatus('กำลังเชื่อมต่อ…');
+  try {
+    const { token } = await api('/api/token', {});
+    const ai = new GoogleGenAI({ apiKey: token, httpOptions: { apiVersion: 'v1alpha' } });
+    session = await ai.live.connect({
+      model: MODEL,
+      config: {
+        responseModalities: [Modality.AUDIO],
+        systemInstruction: SYSTEM,
+        tools: TOOLS,
+        inputAudioTranscription: {},
+        outputAudioTranscription: {},
+        contextWindowCompression: { slidingWindow: {} },
+      },
+      callbacks: {
+        onopen: () => { setStatus('ฟังอยู่… พูดได้เลย'); orb.classList.add('live'); },
+        onmessage: (m) => { lastActivity = Date.now(); onMessage(m); },
+        onerror: (e) => { bubble('sys', 'error: ' + (e.message || e)); },
+        onclose: (e) => { if (session) { bubble('sys', 'ปิดการเชื่อมต่อ' + (e.reason ? ': ' + e.reason : '')); endSession(); } },
+      },
+    });
+  } finally { connecting = false; }
+  lastActivity = Date.now();
+  while (connectQueue.length) sendAudio(connectQueue.shift());   // เสียงที่พูดตอนปลุก/ระหว่างต่อ → ส่งให้ Gemini ฟังด้วย
+}
+
+function endSession() {
+  const s = session; session = null; try { s?.close(); } catch {}
+  stopPlayback(); orb.classList.remove('live'); meBubble = friBubble = null;
+  setStatus(ROOM ? '💤 รอคำปลุก "Friday"' : 'แตะวงกลมเพื่อเริ่มคุย');
+}
+
+// โหมดห้อง: ไม่มีใครพูด/Friday ไม่ได้พูด/ไม่มีงานค้าง นานเกิน idleMs → กลับไปรอคำปลุก
+setInterval(() => {
+  if (!ROOM || !session || connecting) return;
+  const busy = playing.size || confirms.size || pendingResults.length || activeJobs;
+  if (busy) { lastActivity = Date.now(); return; }
+  if (Date.now() - lastActivity > idleMs) { bubble('sys', '💤 พักก่อน — เรียก "Friday" เมื่อต้องการ'); endSession(); }
+}, 2000);
+
+// ---------- คำปลุก: VAD แบบง่าย (พลังงานเสียง) → ตัดช่วงพูด → whisper ในเครื่องเช็คคำว่า Friday ----------
+let noiseFloor = 300, voiced = 0, silent = 0, seg = [], checking = false;
+const preroll = [];
+function rms(buf) { const a = new Int16Array(buf); let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * a[i]; return Math.sqrt(s / a.length); }
+
+function wakeListen(buf) {
+  const level = rms(buf);
+  const speech = level > Math.max(noiseFloor * 3, 400);
+  if (!speech && !seg.length) {                      // เงียบ: ปรับระดับเสียงพื้นหลัง + เก็บ preroll 300ms
+    noiseFloor = noiseFloor * 0.95 + level * 0.05;
+    preroll.push(buf); if (preroll.length > 3) preroll.shift();
+    return;
+  }
+  if (!seg.length) seg.push(...preroll.splice(0));
+  seg.push(buf);
+  if (speech) { voiced++; silent = 0; } else silent++;
+  if (silent >= 6 || seg.length >= 40) {             // จบช่วงพูด (เงียบ 600ms) หรือยาวเกิน 4 วิ
+    const clip = seg; const enough = voiced >= 3;
+    seg = []; voiced = 0; silent = 0;
+    if (enough && !checking) checkWake(clip);
+  }
+}
+
+async function checkWake(chunks) {
+  checking = true;
+  try {
+    const body = new Blob(chunks.map((c) => new Uint8Array(c)));
+    const r = await fetch('/api/wake', { method: 'POST', headers: { 'X-Friday': '1', 'Content-Type': 'application/octet-stream' }, body });
+    const { wake, text } = await r.json();
+    if (wake && !session && !connecting) {
+      chime(); bubble('sys', `👂 ได้ยิน: ${text}`);
+      await openSession(chunks);                      // ส่งเสียงช่วงที่ปลุกให้ Gemini ฟังด้วย ("Friday เปิด Chrome")
+    }
+  } catch (e) { bubble('sys', '⚠️ ' + e.message); endSession(); }
+  finally { checking = false; }
+}
+
+function chime() {
+  if (!outCtx) return;
+  const o = outCtx.createOscillator(), g = outCtx.createGain(), t = outCtx.currentTime;
+  o.frequency.setValueAtTime(880, t); o.frequency.setValueAtTime(1320, t + 0.09);
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.15, t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.25);
+  o.connect(g).connect(outCtx.destination); o.start(t); o.stop(t + 0.26);
+}
+
+// ---------- ปุ่มวงกลม ----------
 let starting = false;
 orb.onclick = async () => {
   if (starting) return;
-  if (session) return stop();
+  if (session) { endSession(); if (!ROOM) closeAudio(); return; }
   starting = true;
-  try { await start(); }
-  catch (e) {
-    stop();
-    if (e.message === NEEDS_TAP) setStatus('👆 แตะวงกลมเพื่อเริ่มคุย');
+  try {
+    if (!micStream) await openAudio();
+    await openSession();
+  } catch (e) {
+    endSession(); if (!ROOM) closeAudio();
+    if (e.message === NEEDS_TAP) setStatus('👆 แตะวงกลมเพื่อเริ่ม');
     else bubble('sys', '⚠️ ' + e.message);
-  }
-  finally { starting = false; }
+  } finally { starting = false; }
 };
 
-// เปิดจาก Shortcut "Friday" (?auto=1): ลองเริ่มเอง — iOS บล็อกเสียงถ้ายังไม่แตะจอ ก็จะกลับมารอให้แตะ
-if (new URLSearchParams(location.search).has('auto')) orb.click();
+// โหมดห้อง (?room=1): เปิดไมค์ค้างไว้รอคำปลุก · Shortcut iPhone (?auto=1): ลองเริ่มคุยเลย
+if (ROOM) {
+  openAudio().then(() => setStatus('💤 รอคำปลุก "Friday"'))
+    .catch((e) => setStatus(e.message === NEEDS_TAP ? '👆 แตะวงกลมหนึ่งครั้งเพื่อเปิดโหมดห้อง' : '⚠️ ' + e.message));
+} else if (new URLSearchParams(location.search).has('auto')) orb.click();

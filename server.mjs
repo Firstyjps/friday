@@ -133,6 +133,35 @@ function startJob(job) {
 
 const view = (j) => ({ id: j.id, status: j.status, result: j.result, task: j.task });
 
+// ---------- คำปลุก (โหมดห้อง) ----------
+// หน้าเว็บส่งเสียงช่วงที่มีคนพูด (PCM16 16kHz mono) มา → whisper-server ในเครื่องถอดความ → เช็คคำว่า Friday
+const WHISPER = process.env.WHISPER_URL || 'http://127.0.0.1:4851/inference';
+const WAKE = /ฟรายเด|ไฟรเด|ฟายเด|ไฟร์เด|ฟรายเด้|ไฟเดย์|fri\s*day/i;
+
+function pcmToWav(pcm) {
+  const h = Buffer.alloc(44);
+  h.write('RIFF', 0); h.writeUInt32LE(36 + pcm.length, 4); h.write('WAVE', 8);
+  h.write('fmt ', 12); h.writeUInt32LE(16, 16); h.writeUInt16LE(1, 20); h.writeUInt16LE(1, 22);
+  h.writeUInt32LE(16000, 24); h.writeUInt32LE(32000, 28); h.writeUInt16LE(2, 32); h.writeUInt16LE(16, 34);
+  h.write('data', 36); h.writeUInt32LE(pcm.length, 40);
+  return Buffer.concat([h, pcm]);
+}
+
+async function detectWake(pcm) {
+  const form = new FormData();
+  form.append('file', new Blob([pcmToWav(pcm)], { type: 'audio/wav' }), 'clip.wav');
+  form.append('response_format', 'json');
+  const r = await fetch(WHISPER, { method: 'POST', body: form });
+  const text = ((await r.json()).text || '').trim();
+  return { text, wake: WAKE.test(text) };
+}
+
+const readRaw = (req, max = 32000 * 10) => new Promise((resolve, reject) => {
+  const chunks = []; let n = 0;
+  req.on('data', (d) => { n += d.length; if (n > max) req.destroy(); else chunks.push(d); });
+  req.on('end', () => resolve(Buffer.concat(chunks))); req.on('error', reject);
+});
+
 // ---------- HTTP ----------
 const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
 const readBody = (req) => new Promise((resolve, reject) => {
@@ -152,6 +181,11 @@ http.createServer(async (req, res) => {
     if (url.pathname.startsWith('/api/')) {
       if (!apiAllowed(req)) return json(res, 403, { error: 'forbidden' });
       if (req.method === 'POST' && url.pathname === '/api/token') return json(res, 200, { token: await createToken() });
+      if (req.method === 'POST' && url.pathname === '/api/wake') {
+        const r = await detectWake(await readRaw(req));
+        if (r.wake) log(`WAKE | ${r.text}`);
+        return json(res, 200, r);
+      }
       if (req.method === 'POST' && url.pathname === '/api/mac') {
         const { task, convo } = await readBody(req);
         if (!task || typeof task !== 'string') return json(res, 400, { error: 'task required' });

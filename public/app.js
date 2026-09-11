@@ -367,6 +367,15 @@ orb.onclick = async () => {
 
 // โหมดห้อง (?room=1): เปิดไมค์ค้างไว้รอคำปลุก · Shortcut iPhone (?auto=1): ลองเริ่มคุยเลย
 if (ROOM) {
-  openAudio().then(() => setStatus('💤 รอคำปลุก "Friday"'))
-    .catch((e) => setStatus(e.message === NEEDS_TAP ? '👆 แตะวงกลมหนึ่งครั้งเพื่อเปิดโหมดห้อง' : '⚠️ ' + e.message));
+  openAudio().then(async () => {
+    setStatus('💤 รอคำปลุก "Friday"');
+    const { wake } = await api('/api/room-hello', {});          // เปิดขึ้นมาเพราะหูเบื้องหลังได้ยิน "Friday"?
+    if (wake && !session) {
+      chime(); bubble('sys', '👂 เรียกแล้ว');
+      await openSession();
+      session?.sendRealtimeInput({ text: '[ผู้ใช้เพิ่งเรียกชื่อคุณ "Friday" — ทักทายสั้นๆ แล้วถามว่าให้ช่วยอะไร]' });
+    }
+  }).catch((e) => setStatus(e.message === NEEDS_TAP ? '👆 แตะวงกลมหนึ่งครั้งเพื่อเปิดโหมดห้อง' : '⚠️ ' + e.message));
+  // ปิดหน้าต่าง → บอก server ให้หูเบื้องหลังฟังแทนทันที
+  addEventListener('pagehide', () => navigator.sendBeacon('/api/bye'));
 } else if (new URLSearchParams(location.search).has('auto')) orb.click();

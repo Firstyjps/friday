@@ -156,6 +156,93 @@ async function detectWake(pcm) {
   return { text, wake: WAKE.test(text) };
 }
 
+// ---------- หูเบื้องหลัง: ฟังคำปลุกตอนหน้าต่าง Friday ปิดอยู่ → เปิดหน้าต่างขึ้นมาเอง ----------
+// หน้าต่างโหมดห้องส่ง ping ทุก 15s → ถ้ายังมีชีวิต หน้าต่างฟังเอง หูนี้ไม่ทำอะไร
+const EAR = process.env.FRIDAY_EAR !== '0';
+let roomSeenAt = 0, pendingWakeAt = 0, earCooldownUntil = 0;
+const roomAlive = () => Date.now() - roomSeenAt < 35000;
+
+const sh = (cmd, args) => new Promise((resolve) => {
+  const p = spawn(cmd, args); let out = '';
+  p.stdout.on('data', (d) => { out += d; }); p.stderr.on('data', (d) => { out += d; });
+  p.on('close', () => resolve(out)); p.on('error', () => resolve(''));
+});
+
+async function defaultInputIndex() {
+  const prof = JSON.parse(await sh('/usr/sbin/system_profiler', ['SPAudioDataType', '-json']) || '{}');
+  const items = (prof.SPAudioDataType ?? []).flatMap((x) => x._items ?? []);
+  const name = items.find((d) => d.coreaudio_default_audio_input_device === 'spaudio_yes')?._name;
+  const list = await sh('/opt/homebrew/bin/ffmpeg', ['-hide_banner', '-f', 'avfoundation', '-list_devices', 'true', '-i', '']);
+  const audio = list.split('AVFoundation audio devices:')[1] ?? '';
+  const devs = [...audio.matchAll(/\[(\d+)\] (.+)/g)].map((m) => ({ idx: m[1], name: m[2].trim() }));
+  const hit = devs.find((d) => d.name === name) ?? devs[0];
+  return hit ? { ...hit } : null;
+}
+
+function startEar() {
+  let ff = null, devName = null;
+  let noise = 300, seg = [], voiced = 0, silent = 0, busy = false; const pre = [];
+  let carry = Buffer.alloc(0);
+
+  async function spawnFf() {
+    const dev = await defaultInputIndex();
+    if (!dev) { log('ear: ไม่พบไมค์'); return setTimeout(spawnFf, 30000); }
+    devName = dev.name;
+    ff = spawn('/opt/homebrew/bin/ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'avfoundation', '-i', `:${dev.idx}`,
+      '-ac', '1', '-ar', '16000', '-f', 's16le', '-']);
+    log(`ear: ฟังจาก "${dev.name}"`);
+    ff.stdout.on('data', onPcm);
+    ff.stderr.on('data', (d) => log(`ear ffmpeg: ${String(d).trim().slice(0, 200)}`));
+    ff.on('close', (code) => { log(`ear: ffmpeg ปิด (${code}) — เริ่มใหม่ใน 5s`); ff = null; setTimeout(spawnFf, 5000); });
+  }
+
+  // ไมค์เปลี่ยน (เสียบ/ถอดหูฟัง/ลำโพงประชุม) → เริ่ม ffmpeg ใหม่ให้ตรงกับค่า default
+  setInterval(async () => { const d = await defaultInputIndex(); if (ff && d && d.name !== devName) { log(`ear: ไมค์เปลี่ยนเป็น "${d.name}"`); ff.kill(); } }, 60000);
+
+  function onPcm(d) {
+    carry = Buffer.concat([carry, d]);
+    while (carry.length >= 3200) {                 // 100ms @16kHz
+      const chunk = carry.subarray(0, 3200); carry = carry.subarray(3200);
+      if (roomAlive() || Date.now() < earCooldownUntil) { seg = []; voiced = silent = 0; continue; }
+      vad(Buffer.from(chunk));
+    }
+  }
+
+  let peak = 0, frames = 0;
+  setInterval(() => { if (!roomAlive()) log(`ear level | frames=${frames} peak=${Math.round(peak)} noise=${Math.round(noise)}`); peak = 0; frames = 0; }, 60000);
+
+  function vad(chunk) {
+    let s = 0; for (let i = 0; i < chunk.length; i += 2) { const v = chunk.readInt16LE(i); s += v * v; }
+    const level = Math.sqrt(s / (chunk.length / 2)); frames++; if (level > peak) peak = level;
+    const speech = level > Math.max(noise * 3, 400);
+    if (!speech && !seg.length) { noise = noise * 0.95 + level * 0.05; pre.push(chunk); if (pre.length > 3) pre.shift(); return; }
+    if (!seg.length) seg.push(...pre.splice(0));
+    seg.push(chunk);
+    if (speech) { voiced++; silent = 0; } else silent++;
+    if (silent >= 6 || seg.length >= 40) {
+      const clip = Buffer.concat(seg), enough = voiced >= 3;
+      seg = []; voiced = silent = 0;
+      if (enough && !busy) check(clip);
+    }
+  }
+
+  async function check(clip) {
+    busy = true;
+    try {
+      const r = await detectWake(clip);
+      log(`ear ${r.wake ? 'WAKE' : 'hear'} | ${r.text}`);
+      if (r.wake && !roomAlive()) {
+        pendingWakeAt = Date.now(); earCooldownUntil = Date.now() + 15000;
+        spawn('/usr/bin/open', ['-a', join(HOME, 'Applications/Friday.app')]);
+      }
+    } catch (e) { log(`ear error: ${e.message}`); }
+    finally { busy = false; }
+  }
+
+  spawnFf();
+}
+if (EAR) startEar();
+
 const readRaw = (req, max = 32000 * 10) => new Promise((resolve, reject) => {
   const chunks = []; let n = 0;
   req.on('data', (d) => { n += d.length; if (n > max) req.destroy(); else chunks.push(d); });
@@ -179,10 +266,17 @@ http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://x');
     if (url.pathname.startsWith('/api/')) {
+      // หน้าต่างกำลังปิด (sendBeacon ใส่ header เองไม่ได้ — endpoint นี้แค่บอกว่าหน้าต่างปิดแล้ว ไม่มีผลอื่น)
+      if (req.method === 'POST' && url.pathname === '/api/bye') { roomSeenAt = 0; log('room: หน้าต่างปิด → หูเบื้องหลังฟังแทน'); return json(res, 200, { ok: true }); }
       if (!apiAllowed(req)) return json(res, 403, { error: 'forbidden' });
+      if (req.method === 'POST' && url.pathname === '/api/room-hello') {
+        roomSeenAt = Date.now();
+        const wake = Date.now() - pendingWakeAt < 20000; pendingWakeAt = 0;
+        return json(res, 200, { wake });
+      }
       if (req.method === 'POST' && url.pathname === '/api/token') return json(res, 200, { token: await createToken() });
       if (req.method === 'POST' && url.pathname === '/api/ping') {   // heartbeat จากหน้าโหมดห้อง (debug)
-        const b = await readBody(req); log(`ping | ${JSON.stringify(b)}`); return json(res, 200, { ok: true });
+        const b = await readBody(req); roomSeenAt = Date.now(); if (b.track !== 'live' || b.ctx !== 'running') log(`ping ⚠️ | ${JSON.stringify(b)}`); return json(res, 200, { ok: true });
       }
       if (req.method === 'POST' && url.pathname === '/api/wake') {
         const r = await detectWake(await readRaw(req));

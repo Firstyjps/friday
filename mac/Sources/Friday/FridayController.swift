@@ -33,6 +33,7 @@ final class FridayController: ObservableObject {
     private let convo = UUID().uuidString          // หนึ่งรอบเปิดแอป = หนึ่ง Claude session (จำงานก่อนหน้าได้)
 
     private var connectQueue: [Data] = []
+    private var speakEndedAt = Date.distantPast
     private var lastActivity = Date()
     private var meIndex: Int?, friIndex: Int?
     private var confirms: [String: (task: String, heard: String)] = [:]
@@ -61,7 +62,10 @@ final class FridayController: ObservableObject {
             affirm = try? NSRegularExpression(pattern: config!.affirm, options: .caseInsensitive)
             negate = try? NSRegularExpression(pattern: config!.negate, options: .caseInsensitive)
             audio.onMic = { [weak self] chunk in Task { @MainActor in self?.onMic(chunk) } }
-            audio.onSpeakingChanged = { [weak self] s in Task { @MainActor in self?.speaking = s; if s { self?.lastActivity = Date() } } }
+            audio.onSpeakingChanged = { [weak self] s in Task { @MainActor in
+                self?.speaking = s; self?.lastActivity = Date()
+                if !s { self?.speakEndedAt = Date() }
+            } }
             do { try audio.start() } catch {
                 Log.write("start: audio error \(error)")
                 setPhase(.error("เปิดไมค์ไม่ได้: \(error.localizedDescription)")); onWantsPanel?(true); return
@@ -103,7 +107,11 @@ final class FridayController: ObservableObject {
     // ---------- ไมค์ ----------
     private func onMic(_ chunk: Data) {
         switch phase {
-        case .live: live?.sendAudio(chunk)
+        case .live:
+            // ไม่มีตัวตัดเสียงสะท้อน (เช่น เสียงออกลำโพงจอ + ไมค์หูฟัง) → ไมค์จะได้ยิน Friday แล้ววนลูปคุยกับตัวเอง
+            // จึงไม่ส่งเสียงไมค์ระหว่าง Friday พูด + ช่วงหางเสียง 0.8 วิ (แลกกับการพูดแทรกไม่ได้ในโหมดนี้)
+            if !audio.aecEnabled && (speaking || Date().timeIntervalSince(speakEndedAt) < 0.8) { return }
+            live?.sendAudio(chunk)
         case .connecting: connectQueue.append(chunk)
         case .sleeping: if !earMuted { wakeListen(chunk) }
         default: break

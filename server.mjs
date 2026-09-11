@@ -230,7 +230,7 @@ function startEar() {
     busy = true;
     try {
       const r = await detectWake(clip);
-      log(`ear ${r.wake ? 'WAKE' : 'hear'} | ${r.text}`);
+      if (r.wake) log(`ear WAKE | ${r.text}`);
       if (r.wake && !roomAlive()) {
         pendingWakeAt = Date.now(); earCooldownUntil = Date.now() + 15000;
         spawn('/usr/bin/open', ['-a', join(HOME, 'Applications/Friday.app')]);
@@ -280,7 +280,7 @@ http.createServer(async (req, res) => {
       }
       if (req.method === 'POST' && url.pathname === '/api/wake') {
         const r = await detectWake(await readRaw(req));
-        log(`${r.wake ? 'WAKE' : 'hear'} | ${r.text}`);
+        if (r.wake) log(`WAKE | ${r.text}`);   // ไม่บันทึกประโยคอื่นที่ไมค์ได้ยิน (ความเป็นส่วนตัว)
         return json(res, 200, r);
       }
       if (req.method === 'POST' && url.pathname === '/api/mac') {

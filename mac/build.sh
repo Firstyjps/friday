@@ -30,6 +30,7 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
   <key>CFBundleVersion</key><string>1</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
+  <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
   <key>NSMicrophoneUsageDescription</key><string>Friday ใช้ไมค์เพื่อฟังคำปลุก "Friday" และคุยกับคุณ (ประมวลคำปลุกในเครื่อง)</string>
   <key>CFBundleURLTypes</key><array><dict>
     <key>CFBundleURLName</key><string>com.kron.friday</string>

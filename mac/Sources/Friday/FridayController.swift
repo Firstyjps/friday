@@ -47,26 +47,30 @@ final class FridayController: ObservableObject {
     // ---------- เริ่มต้น ----------
     func start() {
         Task {
+            Log.write("start: ขอสิทธิ์ไมค์ (สถานะเดิม \(AVCaptureDevice.authorizationStatus(for: .audio).rawValue))")
+            startTimers()                               // ping ตั้งแต่ต้น → เห็นสถานะใน ~/logs/friday.log แม้ค้างกลางทาง
             guard await AVCaptureDevice.requestAccess(for: .audio) else {
                 setPhase(.error("ไม่ได้รับสิทธิ์ใช้ไมค์ — System Settings → Privacy & Security → Microphone → เปิด Friday"))
                 return
             }
+            Log.write("start: ได้สิทธิ์ไมค์ → โหลด config")
             while config == nil {                       // รอ server (LaunchAgent) พร้อม
-                config = try? await ServerAPI.config()
-                if config == nil { try? await Task.sleep(for: .seconds(2)) }
+                do { config = try await ServerAPI.config() }
+                catch { Log.write("start: config error \(error)"); try? await Task.sleep(for: .seconds(2)) }
             }
             affirm = try? NSRegularExpression(pattern: config!.affirm, options: .caseInsensitive)
             negate = try? NSRegularExpression(pattern: config!.negate, options: .caseInsensitive)
             audio.onMic = { [weak self] chunk in Task { @MainActor in self?.onMic(chunk) } }
             audio.onSpeakingChanged = { [weak self] s in Task { @MainActor in self?.speaking = s; if s { self?.lastActivity = Date() } } }
             do { try audio.start() } catch {
-                setPhase(.error("เปิดไมค์ไม่ได้: \(error.localizedDescription)")); return
+                Log.write("start: audio error \(error)")
+                setPhase(.error("เปิดไมค์ไม่ได้: \(error.localizedDescription)")); onWantsPanel?(true); return
             }
             inputName = audio.inputName
+            Log.write("start: พร้อม ฟังจาก \(inputName)")
             setPhase(.sleeping)
             let woke = await ServerAPI.hello()          // ถูกเปิดเพราะหูเบื้องหลังของ server ได้ยิน "Friday"?
             if woke { wake(prebuffer: [], greet: true) }
-            startTimers()
         }
     }
 
@@ -139,7 +143,7 @@ final class FridayController: ObservableObject {
             defer { checking = false }
             guard let r = try? await ServerAPI.wake(pcm: clip.reduce(Data(), +)) else { return }
             if r.wake && phase == .sleeping {
-                sys("👂 ได้ยิน: \(r.text)")
+                sys("👂 ได้ยิน: \(r.text)"); Log.write("wake: \(r.text)")
                 wake(prebuffer: clip, greet: false)      // ส่งเสียงช่วงที่ปลุกให้ Gemini ด้วย ("Friday เปิด Chrome")
             }
         }
@@ -179,6 +183,7 @@ final class FridayController: ObservableObject {
     }
 
     func endSession() {
+        Log.write("session: end")
         live?.close(); live = nil
         audio.flush()
         meIndex = nil; friIndex = nil; connectQueue = []
@@ -193,6 +198,7 @@ final class FridayController: ObservableObject {
         lastActivity = Date()
         switch e {
         case .open:
+            Log.write("session: open")
             setPhase(.live)
             for c in connectQueue { live?.sendAudio(c) }
             connectQueue = []
@@ -216,6 +222,7 @@ final class FridayController: ObservableObject {
             if name == "run_on_mac" { runOnMac(id: id, name: name, task: args["task"] as? String ?? "") }
             else if name == "confirm_task" { confirmTask(id: id, name: name, jobId: args["job_id"] as? String ?? "", approve: args["approve"] as? Bool ?? false) }
         case .closed(let why):
+            Log.write("session: closed \(why)")
             if phase == .live || phase == .connecting {
                 sys("ปิดการเชื่อมต่อ\(why.isEmpty ? "" : ": \(why)")")
                 endSession()

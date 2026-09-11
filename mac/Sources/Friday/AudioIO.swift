@@ -8,7 +8,7 @@ final class AudioIO {
     /// เปลี่ยนสถานะกำลังพูด/เงียบ
     var onSpeakingChanged: ((Bool) -> Void)?
 
-    private let engine = AVAudioEngine()
+    private var engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
     private let playFormat = AVAudioFormat(standardFormatWithSampleRate: 24000, channels: 1)!
     private let micFormat = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16000, channels: 1, interleaved: true)!
@@ -20,26 +20,38 @@ final class AudioIO {
 
     var isSpeaking: Bool { pending > 0 }
     private(set) var inputName = "?"
+    /// voice processing (ตัดเสียงสะท้อน) เปิดได้ไหม — บางคู่อุปกรณ์ (เช่น เสียงออกจอ HDMI/DP + ไมค์ช่องหูฟัง) เปิดไม่ได้
+    private(set) var aecEnabled = true
 
     func start() throws {
         engine.attach(player)
-        try configure()
+        do { try configure() } catch {
+            // voice processing เปิดไม่ได้กับอุปกรณ์ชุดนี้ → เปิดเสียงแบบปกติแทน (ใช้หูฟัง/ลำโพงประชุมที่ตัดเสียงเองได้)
+            Log.write("audio: voice processing ใช้ไม่ได้ (\((error as NSError).code)) → ปิด AEC แล้วลองใหม่")
+            aecEnabled = false
+            engine.stop(); engine.inputNode.removeTap(onBus: 0)
+            engine = AVAudioEngine()
+            engine.attach(player)
+            try configure()
+        }
         // เสียบ/ถอดหูฟัง, เปลี่ยนไมค์ → engine หยุดเอง ต้องตั้งค่าใหม่
         configObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
             guard let self else { return }
-            NSLog("Friday audio: configuration changed → restart")
+            Log.write("audio: configuration changed → restart")
             self.engine.stop()
             self.engine.inputNode.removeTap(onBus: 0)
-            try? self.configure()
+            do { try self.configure() } catch { Log.write("audio: restart error \(error)") }
         }
     }
 
     private func configure() throws {
         let input = engine.inputNode
-        if !input.isVoiceProcessingEnabled { try input.setVoiceProcessingEnabled(true) }
-        input.isVoiceProcessingAGCEnabled = true
-        // อย่ากดเสียงแอปอื่น (เพลง/YouTube) ลงมากตอน Friday ทำงาน
-        input.voiceProcessingOtherAudioDuckingConfiguration = .init(enableAdvancedDucking: true, duckingLevel: .min)
+        if aecEnabled {
+            if !input.isVoiceProcessingEnabled { try input.setVoiceProcessingEnabled(true) }
+            input.isVoiceProcessingAGCEnabled = true
+            // อย่ากดเสียงแอปอื่น (เพลง/YouTube) ลงมากตอน Friday ทำงาน
+            input.voiceProcessingOtherAudioDuckingConfiguration = .init(enableAdvancedDucking: true, duckingLevel: .min)
+        }
 
         engine.connect(player, to: engine.mainMixerNode, format: playFormat)
 
@@ -52,7 +64,7 @@ final class AudioIO {
         try engine.start()
         player.play()
         inputName = AVCaptureDevice.default(for: .audio)?.localizedName ?? "default"
-        NSLog("Friday audio: started, input=\(inputName) format=\(inFormat)")
+        Log.write("audio: started input=\(inputName) aec=\(aecEnabled) format=\(inFormat)")
     }
 
     private func convertAndEmit(_ buf: AVAudioPCMBuffer) {

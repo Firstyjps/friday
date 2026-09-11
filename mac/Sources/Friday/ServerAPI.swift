@@ -89,6 +89,15 @@ enum ServerAPI {
         return obj["wake"] as? Bool ?? false
     }
 
+    /// ตอนแอปปิด (ต้องเสร็จก่อน process จบ) → server ปิดหูสำรองจนกว่าแอปจะเปิดใหม่
+    static func quitSync() {
+        var req = URLRequest(url: base.appending(path: "/api/app-quit"), timeoutInterval: 2)
+        req.httpMethod = "POST"; req.setValue("1", forHTTPHeaderField: "X-Friday")
+        let done = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: req) { _, _, _ in done.signal() }.resume()
+        _ = done.wait(timeout: .now() + 2)
+    }
+
     static func ping(_ info: [String: Any]) async {
         _ = try? await request("/api/ping", method: "POST", json: info)
     }

@@ -35,6 +35,7 @@ final class FridayController: ObservableObject {
     private var userTurn = ""                     // ประโยคล่าสุดของผู้ใช้ (ไว้จับคำลา)
     private var friTurn = ""                      // คำตอบล่าสุดของ Friday (บางทีโมเดลพิมพ์ชื่อ tool ออกมาแทนการเรียก)
     private var ending = false
+    private var pendingMute = false
     private let convo = UUID().uuidString          // หนึ่งรอบเปิดแอป = หนึ่ง Claude session (จำงานก่อนหน้าได้)
 
     private var connectQueue: [Data] = []
@@ -219,16 +220,16 @@ final class FridayController: ObservableObject {
 
     /// Friday ขอจบเอง (ผู้ใช้บอกลา/ให้หยุดฟัง) → รอพูดลาให้จบก่อน แล้วค่อยปิด (ไม่เกิน 10 วิ)
     private func endAfterSpeech(mute: Bool) {
-        guard !ending else { if mute { earMuted = true }; return }
+        guard !ending else { if mute { pendingMute = true }; return }
         ending = true
         let t0 = Date()
         func tick() {
             guard phase == .live || phase == .connecting else { return }
             let quiet = !speaking && Date().timeIntervalSince(t0) > 1.5
             if quiet || Date().timeIntervalSince(t0) > 10 {
-                if mute { earMuted = true; onPhaseChanged?(phase) }
                 Log.write("session: Friday จบเอง\(mute ? " + ปิดหู" : "")")
                 endSession()
+                if mute || pendingMute { pendingMute = false; setEarMuted(true) }
                 onWantsPanel?(false)
             } else {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { tick() }
@@ -410,5 +411,25 @@ final class FridayController: ObservableObject {
         onPhaseChanged?(p)
     }
 
-    func toggleEar() { earMuted.toggle(); seg = []; voiced = 0; silent = 0 }
+    func toggleEar() { setEarMuted(!earMuted) }
+
+    /// ปิดหู = ปล่อยไมค์จริง (ไม่ใช่แค่ไม่สนใจเสียง) · เปิดหู = เปิดไมค์กลับ
+    func setEarMuted(_ mute: Bool) {
+        guard mute != earMuted else { return }
+        earMuted = mute; seg = []; voiced = 0; silent = 0
+        if mute {
+            if phase == .live || phase == .connecting { endSession() }
+            audio.pauseInput()
+        } else {
+            Task { try? audio.resumeInput(); if audio.inputPaused == false { inputName = audio.inputName; outputName = audio.outputName } }
+        }
+        onPhaseChanged?(phase)
+    }
+
+    /// แอปกำลังปิด → ปล่อยไมค์ + บอก server ให้ปิดหูสำรองด้วย (จนกว่าจะเปิดแอปใหม่)
+    func shutdown() {
+        live?.close()
+        audio.pauseInput()
+        ServerAPI.quitSync()
+    }
 }

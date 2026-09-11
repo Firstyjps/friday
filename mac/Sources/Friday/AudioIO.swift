@@ -43,9 +43,25 @@ final class AudioIO {
     private var building = false
     private var listening = false
     private var pendingReselect: DispatchWorkItem?
+    /// ปิดหูอยู่ → ไม่เปิดไมค์เลย (ไอคอนไมค์สีส้มของ macOS จะหาย)
+    private(set) var inputPaused = false
+
+    /// ปล่อยไมค์ (ปิดหู / แอปกำลังปิด) — ปิดทั้งระบบเสียง เพราะตอนนี้ไม่มีอะไรต้องพูด
+    func pauseInput() {
+        inputPaused = true
+        pendingReselect?.cancel(); pendingHealth?.cancel()
+        teardownAll()
+        Log.write("audio: ปล่อยไมค์ (ปิดหู)")
+    }
+
+    func resumeInput() throws {
+        inputPaused = false
+        try start()
+    }
 
     // ---------- เปิด/เลือกอุปกรณ์ ----------
     func start() throws {
+        if inputPaused { return }
         if !listening {
             listening = true
             AudioDevices.onChange { [weak self] in self?.scheduleReselect() }
@@ -167,7 +183,7 @@ final class AudioIO {
     private func scheduleHealthCheck() {
         pendingHealth?.cancel()
         let w = DispatchWorkItem { [weak self] in
-            guard let self, !self.building else { return }
+            guard let self, !self.building, !self.inputPaused else { return }
             if self.inEngine.isRunning && self.outEngine.isRunning { return }
             Log.write("audio: engine หยุด (in=\(self.inEngine.isRunning) out=\(self.outEngine.isRunning)) → เลือกใหม่")
             self.reselect(force: true)
@@ -186,7 +202,7 @@ final class AudioIO {
     }
 
     private func reselect(force: Bool) {
-        guard !building else { return }
+        guard !building, !inputPaused else { return }
         if !force {
             let bestOut = AudioDevices.candidates(input: false, priority: outputPriority).first?.name
             let bestIn = AudioDevices.candidates(input: true, priority: inputPriority, skip: Set(benchedInputs.keys)).first?.name

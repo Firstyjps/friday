@@ -40,11 +40,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func handleURL(_ event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) { summon() }
 
+    /// ปิด Friday (เมนู / ⌘Q) → ปล่อยไมค์ + ปิดหูสำรองของ server ด้วย ไมค์จะไม่ถูกใช้เลยจนกว่าจะเปิดแอปใหม่
+    func applicationWillTerminate(_ n: Notification) { controller.shutdown() }
+
     /// เปิดแอปซ้ำ (Spotlight / Dock / open -a Friday) → เรียกคุย
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { summon(); return false }
 
     private func summon() {
-        if controller.earMuted { controller.toggleEar(); updateIcon(controller.phase); buildMenu() }   // เรียกเอง = เปิดหูคืน
+        if controller.earMuted { controller.setEarMuted(false) }   // เรียกเอง = เปิดหูคืน
         showPanel(true)
         if controller.phase == .sleeping { controller.wake(prebuffer: [], greet: true) }
     }
@@ -88,7 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleTalk() { showPanel(true); controller.toggle() }
     @objc private func showWindow() { showPanel(true) }
-    @objc private func toggleEar() { controller.toggleEar(); updateIcon(controller.phase); buildMenu() }
+    @objc private func toggleEar() { controller.toggleEar() }
     @objc private func openLog() { NSWorkspace.shared.open(URL(fileURLWithPath: NSHomeDirectory() + "/logs/friday.log")) }
 }
 

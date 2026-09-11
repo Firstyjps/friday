@@ -167,6 +167,8 @@ async function detectWake(pcm) {
 // หน้าต่างโหมดห้องส่ง ping ทุก 15s → ถ้ายังมีชีวิต หน้าต่างฟังเอง หูนี้ไม่ทำอะไร
 const EAR = process.env.FRIDAY_EAR !== '0';
 let roomSeenAt = 0, pendingWakeAt = 0, earCooldownUntil = 0;
+let earOff = false;           // ผู้ใช้ปิดแอป Friday เอง → หูสำรองปิดด้วย จนกว่าแอป/เว็บจะกลับมา (ping/hello)
+let earControl = null;        // { stop(), start() } จาก startEar
 const roomAlive = () => Date.now() - roomSeenAt < 35000;
 
 const sh = (cmd, args) => new Promise((resolve) => {
@@ -192,6 +194,7 @@ function startEar() {
   let carry = Buffer.alloc(0);
 
   async function spawnFf() {
+    if (earOff) return;
     const dev = await defaultInputIndex();
     if (!dev) { log('ear: ไม่พบไมค์'); return setTimeout(spawnFf, 30000); }
     devName = dev.name;
@@ -200,7 +203,7 @@ function startEar() {
     log(`ear: ฟังจาก "${dev.name}"`);
     ff.stdout.on('data', onPcm);
     ff.stderr.on('data', (d) => log(`ear ffmpeg: ${String(d).trim().slice(0, 200)}`));
-    ff.on('close', (code) => { log(`ear: ffmpeg ปิด (${code}) — เริ่มใหม่ใน 5s`); ff = null; setTimeout(spawnFf, 5000); });
+    ff.on('close', (code) => { ff = null; if (earOff) return; log(`ear: ffmpeg ปิด (${code}) — เริ่มใหม่ใน 5s`); setTimeout(spawnFf, 5000); });
   }
 
   // ไมค์เปลี่ยน (เสียบ/ถอดหูฟัง/ลำโพงประชุม) → เริ่ม ffmpeg ใหม่ให้ตรงกับค่า default
@@ -246,6 +249,10 @@ function startEar() {
     finally { busy = false; }
   }
 
+  earControl = {
+    stop() { earOff = true; ff?.kill(); log('ear: ปิด (ผู้ใช้ปิดแอป Friday)'); },
+    start() { if (!earOff) return; earOff = false; log('ear: เปิดกลับ'); if (!ff) spawnFf(); },
+  };
   spawnFf();
 }
 if (EAR) startEar();
@@ -276,8 +283,9 @@ http.createServer(async (req, res) => {
       // หน้าต่างกำลังปิด (sendBeacon ใส่ header เองไม่ได้ — endpoint นี้แค่บอกว่าหน้าต่างปิดแล้ว ไม่มีผลอื่น)
       if (req.method === 'POST' && url.pathname === '/api/bye') { roomSeenAt = 0; log('room: หน้าต่างปิด → หูเบื้องหลังฟังแทน'); return json(res, 200, { ok: true }); }
       if (!apiAllowed(req)) return json(res, 403, { error: 'forbidden' });
+      if (req.method === 'POST' && url.pathname === '/api/app-quit') { roomSeenAt = 0; earControl?.stop(); return json(res, 200, { ok: true }); }
       if (req.method === 'POST' && url.pathname === '/api/room-hello') {
-        roomSeenAt = Date.now();
+        roomSeenAt = Date.now(); earControl?.start();
         const wake = Date.now() - pendingWakeAt < 20000; pendingWakeAt = 0;
         return json(res, 200, { wake });
       }

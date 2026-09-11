@@ -164,6 +164,10 @@ function onMessage(msg) {
   for (const fc of msg.toolCall?.functionCalls ?? []) {
     if (fc.name === 'run_on_mac') runOnMac(fc);
     else if (fc.name === 'confirm_task') confirmTask(fc);
+    else if (fc.name === 'end_conversation' || fc.name === 'stop_listening') {   // เว็บ: จบบทสนทนาหลัง Friday พูดลาจบ
+      session?.sendToolResponse({ functionResponses: [{ id: fc.id, name: fc.name, response: { status: 'ok' } }] });
+      endAfterSpeech();
+    }
   }
   const sc = msg.serverContent;
   if (sc?.interrupted) stopPlayback();
@@ -176,6 +180,12 @@ function onMessage(msg) {
   if (sc?.turnComplete) { meBubble = null; friBubble = null; setTimeout(flushResults, 800); }
 }
 
+
+function endAfterSpeech() {
+  const t0 = Date.now();
+  const tick = () => { if (!session) return; if (playing.size && Date.now() - t0 < 10000) return setTimeout(tick, 300); endSession(); if (!ROOM) closeAudio(); };
+  setTimeout(tick, 1500);
+}
 
 // ---------- audio pipeline (ไมค์ + ลำโพง) — แยกจาก Gemini session เพื่อให้โหมดห้องฟังคำปลุกได้ตลอด ----------
 const ROOM = new URLSearchParams(location.search).has('room');

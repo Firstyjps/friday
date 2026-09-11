@@ -31,6 +31,10 @@ final class FridayController: ObservableObject {
     private var config: ServerAPI.Config?
     private var affirm: NSRegularExpression?
     private var negate: NSRegularExpression?
+    private var farewell: NSRegularExpression?
+    private var userTurn = ""                     // ประโยคล่าสุดของผู้ใช้ (ไว้จับคำลา)
+    private var friTurn = ""                      // คำตอบล่าสุดของ Friday (บางทีโมเดลพิมพ์ชื่อ tool ออกมาแทนการเรียก)
+    private var ending = false
     private let convo = UUID().uuidString          // หนึ่งรอบเปิดแอป = หนึ่ง Claude session (จำงานก่อนหน้าได้)
 
     private var connectQueue: [Data] = []
@@ -62,6 +66,7 @@ final class FridayController: ObservableObject {
             }
             affirm = try? NSRegularExpression(pattern: config!.affirm, options: .caseInsensitive)
             negate = try? NSRegularExpression(pattern: config!.negate, options: .caseInsensitive)
+            farewell = config!.farewell.flatMap { try? NSRegularExpression(pattern: $0, options: .caseInsensitive) }
             audio.onMic = { [weak self] chunk in Task { @MainActor in self?.onMic(chunk) } }
             audio.onSpeakingChanged = { [weak self] s in Task { @MainActor in
                 self?.speaking = s; self?.lastActivity = Date()
@@ -212,8 +217,29 @@ final class FridayController: ObservableObject {
         }
     }
 
+    /// Friday ขอจบเอง (ผู้ใช้บอกลา/ให้หยุดฟัง) → รอพูดลาให้จบก่อน แล้วค่อยปิด (ไม่เกิน 10 วิ)
+    private func endAfterSpeech(mute: Bool) {
+        guard !ending else { if mute { earMuted = true }; return }
+        ending = true
+        let t0 = Date()
+        func tick() {
+            guard phase == .live || phase == .connecting else { return }
+            let quiet = !speaking && Date().timeIntervalSince(t0) > 1.5
+            if quiet || Date().timeIntervalSince(t0) > 10 {
+                if mute { earMuted = true; onPhaseChanged?(phase) }
+                Log.write("session: Friday จบเอง\(mute ? " + ปิดหู" : "")")
+                endSession()
+                onWantsPanel?(false)
+            } else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { tick() }
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { tick() }
+    }
+
     func endSession() {
         Log.write("session: end")
+        ending = false; userTurn = ""
         live?.close(); live = nil
         audio.flush()
         meIndex = nil; friIndex = nil; connectQueue = []
@@ -241,15 +267,25 @@ final class FridayController: ObservableObject {
         case .inputText(let t):
             if let i = meIndex { messages[i].text += t } else { messages.append(.init(kind: .me, text: t)); meIndex = messages.count - 1 }
             friIndex = nil
+            if meIndex == messages.count - 1 { userTurn = messages[meIndex!].text }
             for k in confirms.keys { confirms[k]?.heard += t }     // เก็บเสียงผู้ใช้หลังถามยืนยัน
         case .outputText(let t):
+            friTurn += t
             if let i = friIndex { messages[i].text += t } else { messages.append(.init(kind: .fri, text: t)); friIndex = messages.count - 1 }
             meIndex = nil
         case .turnComplete:
             meIndex = nil; friIndex = nil
+            // ตัวสำรอง: ผู้ใช้พูดคำลาแต่ Gemini ไม่เรียก end_conversation → ปิดเองหลัง Friday พูดจบ
+            if !ending, friTurn.contains("stop_listening") { endAfterSpeech(mute: true) }
+            else if !ending, confirms.isEmpty, activeJobs == 0, matches(farewell, userTurn) || friTurn.contains("end_conversation") { endAfterSpeech(mute: false) }
+            userTurn = ""; friTurn = ""
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in self?.flushResults() }
         case .toolCall(let id, let name, let args):
             if name == "run_on_mac" { runOnMac(id: id, name: name, task: args["task"] as? String ?? "") }
+            else if name == "end_conversation" || name == "stop_listening" {
+                live?.sendToolResponse(id: id, name: name, response: ["status": "ok"])
+                endAfterSpeech(mute: name == "stop_listening")
+            }
             else if name == "confirm_task" { confirmTask(id: id, name: name, jobId: args["job_id"] as? String ?? "", approve: args["approve"] as? Bool ?? false) }
         case .closed(let why):
             Log.write("session: closed \(why)")

@@ -44,6 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { summon(); return false }
 
     private func summon() {
+        if controller.earMuted { controller.toggleEar(); updateIcon(controller.phase); buildMenu() }   // เรียกเอง = เปิดหูคืน
         showPanel(true)
         if controller.phase == .sleeping { controller.wake(prebuffer: [], greet: true) }
     }

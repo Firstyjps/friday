@@ -14,7 +14,7 @@ enum SelfTest {
                 var audioBytes = 0, text = "", tool = ""
                 s.onEvent = { e in
                     switch e {
-                    case .open: print("setupComplete ✅"); s.sendText("ช่วยนับหน่อยว่าบนเดสก์ท็อปมีกี่โฟลเดอร์ ตอบแค่เรียก tool")
+                    case .open: print("setupComplete ✅"); s.sendText(ProcessInfo.processInfo.environment["FRIDAY_TEST_PROMPT"] ?? "ช่วยนับหน่อยว่าบนเดสก์ท็อปมีกี่โฟลเดอร์ ตอบแค่เรียก tool")
                     case .audio(let d): audioBytes += d.count
                     case .outputText(let t): text += t
                     case .toolCall(let id, let name, let args):

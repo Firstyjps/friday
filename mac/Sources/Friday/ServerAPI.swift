@@ -22,6 +22,7 @@ enum ServerAPI {
         let tools: JSONValue
         var outputPriority: [String]? = nil
         var inputPriority: [String]? = nil
+        var farewell: String? = nil
     }
 
     enum APIError: LocalizedError {

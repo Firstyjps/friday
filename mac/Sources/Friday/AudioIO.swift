@@ -9,7 +9,7 @@ final class AudioIO {
     var onSpeakingChanged: ((Bool) -> Void)?
 
     private var engine = AVAudioEngine()
-    private let player = AVAudioPlayerNode()
+    private var player = AVAudioPlayerNode()
     private let playFormat = AVAudioFormat(standardFormatWithSampleRate: 24000, channels: 1)!
     private let micFormat = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16000, channels: 1, interleaved: true)!
     private var converter: AVAudioConverter?
@@ -23,25 +23,39 @@ final class AudioIO {
     /// voice processing (ตัดเสียงสะท้อน) เปิดได้ไหม — บางคู่อุปกรณ์ (เช่น เสียงออกจอ HDMI/DP + ไมค์ช่องหูฟัง) เปิดไม่ได้
     private(set) var aecEnabled = true
 
+    /// ระบบเสียงพังระหว่างทาง (เปลี่ยนอุปกรณ์แล้วเปิดใหม่ไม่ได้) → ให้ controller วนลองใหม่
+    var onFailure: (() -> Void)?
+
+    /// เปิดระบบเสียง: ลอง voice processing ก่อน ไม่ได้ค่อยเปิดแบบปกติ · เรียกซ้ำได้ (สร้าง engine ใหม่ทุกครั้ง)
     func start() throws {
-        engine.attach(player)
-        do { try configure() } catch {
+        aecEnabled = true
+        do { try build() } catch {
             // voice processing เปิดไม่ได้กับอุปกรณ์ชุดนี้ → เปิดเสียงแบบปกติแทน (ใช้หูฟัง/ลำโพงประชุมที่ตัดเสียงเองได้)
             Log.write("audio: voice processing ใช้ไม่ได้ (\((error as NSError).code)) → ปิด AEC แล้วลองใหม่")
             aecEnabled = false
-            engine.stop(); engine.inputNode.removeTap(onBus: 0)
-            engine = AVAudioEngine()
-            engine.attach(player)
-            try configure()
+            try build()
         }
-        // เสียบ/ถอดหูฟัง, เปลี่ยนไมค์ → engine หยุดเอง ต้องตั้งค่าใหม่
+    }
+
+    private func build() throws {
+        teardown()
+        engine = AVAudioEngine()
+        player = AVAudioPlayerNode()
+        engine.attach(player)
+        generation += 1; pending = 0
+        do { try configure() } catch { teardown(); throw error }
+        // เสียบ/ถอดหูฟัง, เปลี่ยนไมค์/ลำโพง → engine หยุดเอง ต้องสร้างใหม่
         configObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
             guard let self else { return }
             Log.write("audio: configuration changed → restart")
-            self.engine.stop()
-            self.engine.inputNode.removeTap(onBus: 0)
-            do { try self.configure() } catch { Log.write("audio: restart error \(error)") }
+            do { try self.start() } catch { Log.write("audio: restart error \(error)"); self.onFailure?() }
         }
+    }
+
+    private func teardown() {
+        if let o = configObserver { NotificationCenter.default.removeObserver(o); configObserver = nil }
+        engine.stop()
+        engine.inputNode.removeTap(onBus: 0)
     }
 
     private func configure() throws {

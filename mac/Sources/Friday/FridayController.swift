@@ -66,16 +66,31 @@ final class FridayController: ObservableObject {
                 self?.speaking = s; self?.lastActivity = Date()
                 if !s { self?.speakEndedAt = Date() }
             } }
-            do { try audio.start() } catch {
-                Log.write("start: audio error \(error)")
-                setPhase(.error("เปิดไมค์ไม่ได้: \(error.localizedDescription)")); onWantsPanel?(true); return
-            }
-            inputName = audio.inputName
-            Log.write("start: พร้อม ฟังจาก \(inputName)")
-            setPhase(.sleeping)
+            audio.onFailure = { [weak self] in Task { @MainActor in await self?.openAudio() } }
+            await openAudio()
             let woke = await ServerAPI.hello()          // ถูกเปิดเพราะหูเบื้องหลังของ server ได้ยิน "Friday"?
             if woke { wake(prebuffer: [], greet: true) }
         }
+    }
+
+    /// เปิดระบบเสียง วนลองทุก 5 วิจนสำเร็จ (ตอนเปิดเครื่อง ลำโพง/จอนอก/ไมค์ อาจยังไม่พร้อม)
+    private var openingAudio = false
+    private func openAudio() async {
+        guard !openingAudio else { return }
+        openingAudio = true; defer { openingAudio = false }
+        var attempt = 0
+        while true {
+            do { try audio.start(); break } catch {
+                attempt += 1
+                Log.write("audio: เปิดไม่สำเร็จ ครั้งที่ \(attempt): \(error)")
+                phase = .starting
+                if attempt == 12 { setPhase(.error("เปิดระบบเสียงไม่ได้ (ลองมา 1 นาทีแล้ว ยังลองต่อ): \(error.localizedDescription)")); onWantsPanel?(true) }
+                try? await Task.sleep(for: .seconds(5))
+            }
+        }
+        inputName = audio.inputName
+        Log.write("start: พร้อม ฟังจาก \(inputName) (aec=\(audio.aecEnabled))")
+        if live == nil { setPhase(.sleeping) }
     }
 
     private func startTimers() {

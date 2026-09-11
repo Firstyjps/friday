@@ -21,6 +21,7 @@ final class FridayController: ObservableObject {
     @Published var messages: [Message] = []
     @Published var earMuted = false
     @Published var inputName = ""
+    @Published var outputName = ""
 
     var onPhaseChanged: ((Phase) -> Void)?
     var onWantsPanel: ((Bool) -> Void)?
@@ -66,6 +67,12 @@ final class FridayController: ObservableObject {
                 self?.speaking = s; self?.lastActivity = Date()
                 if !s { self?.speakEndedAt = Date() }
             } }
+            audio.outputPriority = config!.outputPriority ?? []
+            audio.inputPriority = config!.inputPriority ?? []
+            audio.onDevicesChanged = { [weak self] in Task { @MainActor in
+                guard let self else { return }
+                self.inputName = self.audio.inputName; self.outputName = self.audio.outputName; self.onPhaseChanged?(self.phase)
+            } }
             audio.onFailure = { [weak self] in Task { @MainActor in await self?.openAudio() } }
             await openAudio()
             let woke = await ServerAPI.hello()          // ถูกเปิดเพราะหูเบื้องหลังของ server ได้ยิน "Friday"?
@@ -88,8 +95,8 @@ final class FridayController: ObservableObject {
                 try? await Task.sleep(for: .seconds(5))
             }
         }
-        inputName = audio.inputName
-        Log.write("start: พร้อม ฟังจาก \(inputName) (aec=\(audio.aecEnabled))")
+        inputName = audio.inputName; outputName = audio.outputName
+        Log.write("start: พร้อม 🎤 \(inputName) · 🔊 \(outputName) (aec=\(audio.aecEnabled))")
         if live == nil { setPhase(.sleeping) }
     }
 

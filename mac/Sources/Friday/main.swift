@@ -74,6 +74,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         m.addItem(withTitle: talking ? "หยุดคุย" : "คุยกับ Friday  (⌥⌘F)", action: #selector(toggleTalk), keyEquivalent: "").target = self
         m.addItem(withTitle: "แสดงหน้าต่าง", action: #selector(showWindow), keyEquivalent: "").target = self
         m.addItem(.separator())
+        for line in ["🔊 \(controller.outputName.isEmpty ? "-" : controller.outputName)", "🎤 \(controller.inputName.isEmpty ? "-" : controller.inputName)"] {
+            let it = NSMenuItem(title: line, action: nil, keyEquivalent: ""); it.isEnabled = false; m.addItem(it)
+        }
+        m.addItem(.separator())
         m.addItem(withTitle: controller.earMuted ? "เปิดหู (ฟังคำปลุก)" : "ปิดหู (ไม่ฟังคำปลุก)", action: #selector(toggleEar), keyEquivalent: "").target = self
         m.addItem(withTitle: "เปิด log", action: #selector(openLog), keyEquivalent: "").target = self
         m.addItem(.separator())

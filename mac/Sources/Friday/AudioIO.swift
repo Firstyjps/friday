@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreAudio
 
 /// ไมค์ + ลำโพงของ Friday บน AVAudioEngine เดียว
 /// เปิด voice processing ของ Apple → ตัดเสียง Friday ออกจากไมค์ (ใช้ลำโพง Mac ได้ พูดแทรกได้) + ปรับระดับเสียงอัตโนมัติ
@@ -20,36 +21,89 @@ final class AudioIO {
 
     var isSpeaking: Bool { pending > 0 }
     private(set) var inputName = "?"
+    private(set) var outputName = "?"
     /// voice processing (ตัดเสียงสะท้อน) เปิดได้ไหม — บางคู่อุปกรณ์ (เช่น เสียงออกจอ HDMI/DP + ไมค์ช่องหูฟัง) เปิดไม่ได้
     private(set) var aecEnabled = true
 
+    /// ลำดับอุปกรณ์ที่อยากใช้ (ชื่อบางส่วน) — มาจาก config.json
+    var outputPriority: [String] = []
+    var inputPriority: [String] = []
+    /// ไมค์ที่ส่งเสียงเงียบสนิท (เช่น ไมค์ MacBook ตอนปิดฝา) → พักไว้ชั่วคราว ข้ามไปตัวถัดไป
+    private var benchedInputs: [String: Date] = [:]
+    private var zeroSince: Date?
+
     /// ระบบเสียงพังระหว่างทาง (เปลี่ยนอุปกรณ์แล้วเปิดใหม่ไม่ได้) → ให้ controller วนลองใหม่
     var onFailure: (() -> Void)?
+    /// ใช้อุปกรณ์ชุดใหม่แล้ว (ไว้อัปเดตเมนู)
+    var onDevicesChanged: (() -> Void)?
 
-    /// เปิดระบบเสียง: ลอง voice processing ก่อน ไม่ได้ค่อยเปิดแบบปกติ · เรียกซ้ำได้ (สร้าง engine ใหม่ทุกครั้ง)
+    private var listening = false
+
+    /// เปิดระบบเสียง: ไล่ลำโพง/ไมค์ตามลำดับ อันไหนเปิดไม่ได้ข้ามไปตัวถัดไป · เรียกซ้ำได้ (สร้าง engine ใหม่ทุกครั้ง)
     func start() throws {
-        aecEnabled = true
-        do { try build() } catch {
-            // voice processing เปิดไม่ได้กับอุปกรณ์ชุดนี้ → เปิดเสียงแบบปกติแทน (ใช้หูฟัง/ลำโพงประชุมที่ตัดเสียงเองได้)
-            Log.write("audio: voice processing ใช้ไม่ได้ (\((error as NSError).code)) → ปิด AEC แล้วลองใหม่")
-            aecEnabled = false
-            try build()
+        if !listening {                                    // เสียบ/ถอดอุปกรณ์ → เลือกใหม่ (ถ้าตัวที่ดีกว่าโผล่มา)
+            listening = true
+            AudioDevices.onChange { [weak self] in self?.devicesChanged() }
         }
+        benchedInputs = benchedInputs.filter { $0.value > Date() }
+        let outs = AudioDevices.candidates(input: false, priority: outputPriority)
+        let ins = AudioDevices.candidates(input: true, priority: inputPriority, skip: Set(benchedInputs.keys))
+        guard !outs.isEmpty, !ins.isEmpty else {
+            throw NSError(domain: "Friday", code: 1, userInfo: [NSLocalizedDescriptionKey: "ไม่พบ\(outs.isEmpty ? "ลำโพง" : "ไมค์")ที่ใช้ได้"])
+        }
+        // ตัวตัดเสียงสะท้อนของ Apple ใช้ได้เฉพาะอุปกรณ์ default ของเครื่อง → ลองเฉพาะเมื่อ default ตรงกับตัวที่อยากใช้อันดับแรก
+        if outs[0].id == AudioDevices.defaultDevice(input: false) && ins[0].id == AudioDevices.defaultDevice(input: true) {
+            aecEnabled = true
+            do { try build(output: nil, input: nil); return }
+            catch { Log.write("audio: voice processing ใช้ไม่ได้ (\((error as NSError).code)) → เปิดแบบปกติ") }
+        }
+        aecEnabled = false
+        var lastError: Error?
+        for out in outs {
+            for inp in ins.prefix(3) {
+                do { try build(output: out, input: inp); return }
+                catch { lastError = error; Log.write("audio: ใช้ \(out.name) + \(inp.name) ไม่ได้ (\((error as NSError).code)) → ลองตัวถัดไป") }
+            }
+        }
+        throw lastError ?? NSError(domain: "Friday", code: 2)
     }
 
-    private func build() throws {
+    private func devicesChanged() {
+        let bestOut = AudioDevices.candidates(input: false, priority: outputPriority).first?.name
+        let bestIn = AudioDevices.candidates(input: true, priority: inputPriority, skip: Set(benchedInputs.keys)).first?.name
+        guard bestOut != outputName || bestIn != inputName else { return }
+        Log.write("audio: อุปกรณ์เปลี่ยน (\(bestOut ?? "-") / \(bestIn ?? "-")) → เลือกใหม่")
+        do { try start() } catch { Log.write("audio: เลือกใหม่ไม่สำเร็จ \(error)"); onFailure?() }
+    }
+
+    private func build(output: AudioDevice?, input: AudioDevice?) throws {
         teardown()
         engine = AVAudioEngine()
         player = AVAudioPlayerNode()
         engine.attach(player)
-        generation += 1; pending = 0
-        do { try configure() } catch { teardown(); throw error }
-        // เสียบ/ถอดหูฟัง, เปลี่ยนไมค์/ลำโพง → engine หยุดเอง ต้องสร้างใหม่
+        generation += 1; pending = 0; zeroSince = nil
+        do {
+            if let output { try setDevice(engine.outputNode.audioUnit, output.id) }
+            if let input { try setDevice(engine.inputNode.audioUnit, input.id) }
+            try configure()
+        } catch { teardown(); throw error }
+        outputName = output?.name ?? AudioDevices.all().first { $0.id == AudioDevices.defaultDevice(input: false) }?.name ?? "default"
+        inputName = input?.name ?? AudioDevices.all().first { $0.id == AudioDevices.defaultDevice(input: true) }?.name ?? "default"
+        Log.write("audio: 🔊 \(outputName) · 🎤 \(inputName) · aec=\(aecEnabled)")
+        onDevicesChanged?()
+        // ระบบเสียงเปลี่ยนเอง (sample rate/ช่องสัญญาณ) → engine หยุด ต้องสร้างใหม่
         configObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
             guard let self else { return }
             Log.write("audio: configuration changed → restart")
             do { try self.start() } catch { Log.write("audio: restart error \(error)"); self.onFailure?() }
         }
+    }
+
+    private func setDevice(_ unit: AudioUnit?, _ id: AudioDeviceID) throws {
+        guard let unit else { throw NSError(domain: "Friday", code: 3) }
+        var dev = id
+        let st = AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &dev, UInt32(MemoryLayout<AudioDeviceID>.size))
+        if st != noErr { throw NSError(domain: NSOSStatusErrorDomain, code: Int(st)) }
     }
 
     private func teardown() {
@@ -70,6 +124,7 @@ final class AudioIO {
         engine.connect(player, to: engine.mainMixerNode, format: playFormat)
 
         let inFormat = input.outputFormat(forBus: 0)
+        guard inFormat.sampleRate > 0, inFormat.channelCount > 0 else { throw NSError(domain: "Friday", code: 4, userInfo: [NSLocalizedDescriptionKey: "ไมค์ไม่มีสัญญาณ"]) }
         converter = AVAudioConverter(from: inFormat, to: micFormat)
         input.installTap(onBus: 0, bufferSize: 2048, format: inFormat) { [weak self] buf, _ in
             self?.micQueue.async { self?.convertAndEmit(buf) }
@@ -77,11 +132,28 @@ final class AudioIO {
         engine.prepare()
         try engine.start()
         player.play()
-        inputName = AVCaptureDevice.default(for: .audio)?.localizedName ?? "default"
-        Log.write("audio: started input=\(inputName) aec=\(aecEnabled) format=\(inFormat)")
+    }
+
+    /// ไมค์ส่งแต่ค่า 0 ติดกันเกิน 4 วิ (ไมค์ MacBook ตอนปิดฝาเป็นแบบนี้) → พักไมค์นี้ 2 นาที แล้วไปตัวถัดไป
+    private func checkDeadInput(_ buf: AVAudioPCMBuffer) {
+        guard let ch = buf.floatChannelData?[0] else { return }
+        var peak: Float = 0
+        for i in 0..<Int(buf.frameLength) { peak = max(peak, abs(ch[i])) }
+        if peak > 0 { zeroSince = nil; return }
+        let since = zeroSince ?? Date(); zeroSince = since
+        guard Date().timeIntervalSince(since) > 4 else { return }
+        zeroSince = nil
+        let name = inputName
+        DispatchQueue.main.async { [weak self] in
+            guard let self, name == self.inputName else { return }
+            Log.write("audio: ไมค์ \(name) เงียบสนิท → พักไว้ 2 นาที เปลี่ยนตัวถัดไป")
+            self.benchedInputs[name] = Date().addingTimeInterval(120)
+            do { try self.start() } catch { Log.write("audio: เปลี่ยนไมค์ไม่สำเร็จ \(error)"); self.onFailure?() }
+        }
     }
 
     private func convertAndEmit(_ buf: AVAudioPCMBuffer) {
+        checkDeadInput(buf)
         guard let converter else { return }
         let ratio = micFormat.sampleRate / buf.format.sampleRate
         let cap = AVAudioFrameCount(Double(buf.frameLength) * ratio + 32)

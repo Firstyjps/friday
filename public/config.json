@@ -47,5 +47,23 @@
         }
       ]
     }
-  ]
+  ],
+  "outputPriority": [
+    "PG32UCDM",
+    "Jabra",
+    "PowerConf",
+    "Luna",
+    "Speak",
+    "External Headphones",
+    "MacBook Air Speakers"
+  ],
+  "inputPriority": [
+    "Jabra",
+    "PowerConf",
+    "Luna",
+    "Speak",
+    "External Microphone",
+    "MacBook Air Microphone"
+  ],
+  "_devicesNote": "ลำดับอุปกรณ์ของแอป Mac: ชื่อบางส่วน ไม่สนตัวพิมพ์ · ตัวแรกที่ใช้ได้ถูกเลือก · ไม่ตรงรายการ → default ของเครื่อง → ที่เหลือ (ข้ามอุปกรณ์เสมือน)"
 }

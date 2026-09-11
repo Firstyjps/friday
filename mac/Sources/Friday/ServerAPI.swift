@@ -20,6 +20,8 @@ enum ServerAPI {
         let affirm: String
         let negate: String
         let tools: JSONValue
+        var outputPriority: [String]? = nil
+        var inputPriority: [String]? = nil
     }
 
     enum APIError: LocalizedError {

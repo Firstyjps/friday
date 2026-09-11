@@ -302,8 +302,15 @@ let noiseFloor = 300, voiced = 0, silent = 0, seg = [], checking = false;
 const preroll = [];
 function rms(buf) { const a = new Int16Array(buf); let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * a[i]; return Math.sqrt(s / a.length); }
 
+let lastLevel = 0, peakLevel = 0, chunkCount = 0;
+if (ROOM) setInterval(() => {
+  const track = micStream?.getAudioTracks()[0];
+  api('/api/ping', { session: !!session, track: track?.readyState ?? 'none', label: track?.label?.slice(0, 40), ctx: micCtx?.state, chunks: chunkCount, noise: Math.round(noiseFloor), peak: Math.round(peakLevel), checking }).catch(() => {});
+  chunkCount = 0; peakLevel = 0;
+}, 15000);
+
 function wakeListen(buf) {
-  const level = rms(buf);
+  const level = rms(buf); lastLevel = level; chunkCount++; if (level > peakLevel) peakLevel = level;
   const speech = level > Math.max(noiseFloor * 3, 400);
   if (!speech && !seg.length) {                      // เงียบ: ปรับระดับเสียงพื้นหลัง + เก็บ preroll 300ms
     noiseFloor = noiseFloor * 0.95 + level * 0.05;

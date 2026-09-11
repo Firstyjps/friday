@@ -181,9 +181,12 @@ http.createServer(async (req, res) => {
     if (url.pathname.startsWith('/api/')) {
       if (!apiAllowed(req)) return json(res, 403, { error: 'forbidden' });
       if (req.method === 'POST' && url.pathname === '/api/token') return json(res, 200, { token: await createToken() });
+      if (req.method === 'POST' && url.pathname === '/api/ping') {   // heartbeat จากหน้าโหมดห้อง (debug)
+        const b = await readBody(req); log(`ping | ${JSON.stringify(b)}`); return json(res, 200, { ok: true });
+      }
       if (req.method === 'POST' && url.pathname === '/api/wake') {
         const r = await detectWake(await readRaw(req));
-        if (r.wake) log(`WAKE | ${r.text}`);
+        log(`${r.wake ? 'WAKE' : 'hear'} | ${r.text}`);
         return json(res, 200, r);
       }
       if (req.method === 'POST' && url.pathname === '/api/mac') {

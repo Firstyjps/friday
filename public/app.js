@@ -213,15 +213,16 @@ function onMessage(msg) {
 
 async function start() {
   setStatus('กำลังเชื่อมต่อ…');
+  // เปิดไมค์ก่อน: iOS/WebKit ยอมให้เล่นเสียงโดยไม่ต้องแตะจอ ถ้าหน้าเว็บกำลังใช้ไมค์อยู่
+  micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 } });
   outCtx = new AudioContext();
   micCtx = new AudioContext();
-  // iOS: resume() ค้างตลอดถ้ายังไม่มีการแตะจอ → ตัดที่ 1.5s แล้วให้ผู้ใช้แตะวงกลมแทน
+  // ถ้ายัง resume ไม่ได้ (เบราว์เซอร์บล็อก) → ตัดที่ 1.5s แล้วให้ผู้ใช้แตะวงกลมแทน
   const resumed = await Promise.race([
     Promise.all([outCtx.resume(), micCtx.resume()]).then(() => true),
     new Promise((r) => setTimeout(() => r(false), 1500)),
   ]);
   if (!resumed) throw new Error(NEEDS_TAP);
-  micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 } });
   const { token } = await api('/api/token', {});
 
   const ai = new GoogleGenAI({ apiKey: token, httpOptions: { apiVersion: 'v1alpha' } });

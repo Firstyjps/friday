@@ -225,8 +225,9 @@ const idleMs = 20000;                          // โหมดห้อง: เ�
 async function openAudio() {
   // เปิดไมค์ก่อน: iOS/WebKit ยอมให้เล่นเสียงโดยไม่ต้องแตะจอ ถ้าหน้าเว็บกำลังใช้ไมค์อยู่
   micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 } });
-  outCtx = new AudioContext();
-  micCtx = new AudioContext();
+  // ลำโพงเล่นที่ 24kHz ตรงกับเสียงจาก Gemini — ถ้าให้เบราว์เซอร์ resample ทีละก้อนเล็กๆ จะมีเสียงคลิกถี่ๆ (หึ่ง/ตู้ด) ตรงรอยต่อ
+  try { outCtx = new AudioContext({ sampleRate: 24000 }); } catch { outCtx = new AudioContext(); }
+  micCtx = new AudioContext();                 // ไมค์ใช้ rate ของเครื่อง แล้ว resample → 16k ใน worklet
   // ถ้ายัง resume ไม่ได้ (เบราว์เซอร์บล็อก) → ตัดที่ 1.5s แล้วให้ผู้ใช้แตะวงกลมแทน
   const resumed = await Promise.race([
     Promise.all([outCtx.resume(), micCtx.resume()]).then(() => true),

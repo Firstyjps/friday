@@ -102,6 +102,8 @@ function runClaude(task, resumeId, confirmed) {
 }
 
 function createJob(convo, task) {
+  const dup = [...jobs.values()].find((j) => j.convo === convo && j.task === task && Date.now() - j.startedAt < 30000 && j.status !== 'cancelled');
+  if (dup) { log(`JOB ${dup.id} dedupe (สั่งซ้ำ) | ${task}`); return dup; }
   const id = randomUUID().slice(0, 8);
   const job = { id, convo, task, status: 'new', result: null, confirmed: false, startedAt: Date.now() };
   jobs.set(id, job);
@@ -136,8 +138,10 @@ const view = (j) => ({ id: j.id, status: j.status, result: j.result, task: j.tas
 // ---------- คำปลุก (โหมดห้อง) ----------
 // หน้าเว็บส่งเสียงช่วงที่มีคนพูด (PCM16 16kHz mono) มา → whisper-server ในเครื่องถอดความ → เช็คคำว่า Friday
 const WHISPER = process.env.WHISPER_URL || 'http://127.0.0.1:4851/inference';
-// ต้องเป็นคำแรกของประโยค (ยอมให้มีคำทักนำหน้าได้ เช่น "เฮ้ Friday") — กันตื่นตอนแค่พูดถึง Friday กลางประโยค
-const WAKE = /^[\s,.!?"'“”…-]*(?:(?:hey|hi|ok|okay|เฮ้|เฮ|หวัดดี|สวัสดี|โอเค|นี่|เอ่อ|อ่า)[\s,]*)?(ฟรายเด|ไฟรเด|ฟายเด|ไฟร์เด|ฟรายเด้|ไฟเดย์|fri\s*day)/i;
+// Friday ต้องอยู่ต้นประโยค (ตัวอักษรที่ ≤ 8 หลังตัดช่องว่าง/เครื่องหมาย → ยอมให้มีคำนำหน้าสั้นๆ เช่น "เฮ้ย", "นี่")
+// กันตื่นตอนแค่พูดถึง Friday กลางประโยค · รวมคำที่ whisper ชอบได้ยินเพี้ยน
+const WAKE_WORD = /(ฟรายเด|ไฟรเด|ไฟร์เด|ฟายเด|ไฟเด|พรายเด|ฟรายดี|ไฟรดี|ฟายดี|ฟรายได|fri\s*day|fr[ai]i?day)/i;
+const WAKE_MAX_OFFSET = 8;
 
 function pcmToWav(pcm) {
   const h = Buffer.alloc(44);
@@ -154,8 +158,10 @@ async function detectWake(pcm) {
   form.append('response_format', 'json');
   const r = await fetch(WHISPER, { method: 'POST', body: form });
   const text = ((await r.json()).text || '').trim();
-  const m = text.match(WAKE);
-  return { text, wake: !!m, phrase: m ? m[0].trim() : '' };
+  const clean = text.replace(/^[\s,.!?"'“”…\-]+/, '');
+  const m = clean.match(WAKE_WORD);
+  const wake = !!m && m.index <= WAKE_MAX_OFFSET;
+  return { text, wake, phrase: wake ? clean.slice(0, m.index + m[0].length) : '' };
 }
 
 // ---------- หูเบื้องหลัง: ฟังคำปลุกตอนหน้าต่าง Friday ปิดอยู่ → เปิดหน้าต่างขึ้นมาเอง ----------
@@ -282,7 +288,8 @@ http.createServer(async (req, res) => {
       }
       if (req.method === 'POST' && url.pathname === '/api/wake') {
         const r = await detectWake(await readRaw(req));
-        if (r.wake) log(`WAKE | ${r.phrase}`);   // เก็บแค่คำปลุก ไม่เก็บประโยคที่ได้ยิน (บทสนทนากับ Friday จริงๆ log แยกในแอป)
+        if (r.wake) log(`WAKE | ${r.phrase}`);
+        else if (r.text) log(`hear | ${r.text.slice(0, 20)}${r.text.length > 20 ? '…' : ''}`);   // ชั่วคราว: ไว้ปรับคำปลุก (เก็บแค่ต้นประโยค)   // เก็บแค่คำปลุก ไม่เก็บประโยคที่ได้ยิน (บทสนทนากับ Friday จริงๆ log แยกในแอป)
         return json(res, 200, r);
       }
       if (req.method === 'POST' && url.pathname === '/api/mac') {

@@ -235,6 +235,7 @@ async function openSession(prebuffer = []) {
       model: MODEL,
       config: {
         responseModalities: [Modality.AUDIO],
+        ...(CFG.speechConfig ? { speechConfig: CFG.speechConfig } : {}),
         systemInstruction: SYSTEM,
         tools: TOOLS,
         inputAudioTranscription: {},

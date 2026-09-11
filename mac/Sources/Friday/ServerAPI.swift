@@ -23,6 +23,7 @@ enum ServerAPI {
         var outputPriority: [String]? = nil
         var inputPriority: [String]? = nil
         var farewell: String? = nil
+        var speechConfig: JSONValue? = nil
     }
 
     enum APIError: LocalizedError {

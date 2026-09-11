@@ -24,7 +24,7 @@ final class LiveSession: NSObject, URLSessionWebSocketDelegate {
         let url = URL(string: "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=\(q)")!
         setup = ["setup": [
             "model": "models/\(config.model)",
-            "generationConfig": ["responseModalities": ["AUDIO"]],
+            "generationConfig": generationConfig(config),
             "systemInstruction": ["parts": [["text": config.system]]],
             "tools": config.tools.any,
             "inputAudioTranscription": [:] as [String: Any],
@@ -36,6 +36,13 @@ final class LiveSession: NSObject, URLSessionWebSocketDelegate {
         task?.maximumMessageSize = 16 * 1024 * 1024
         task?.resume()
         receive()
+    }
+
+    /// เสียงของ Friday มาจาก config.json (speechConfig) — เปลี่ยนเสียงได้โดยไม่ต้อง build ใหม่
+    private func generationConfig(_ c: ServerAPI.Config) -> [String: Any] {
+        var g: [String: Any] = ["responseModalities": ["AUDIO"]]
+        if let sc = c.speechConfig { g["speechConfig"] = sc.any }
+        return g
     }
 
     func urlSession(_ s: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol p: String?) {

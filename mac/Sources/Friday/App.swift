@@ -95,11 +95,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openLog() { NSWorkspace.shared.open(URL(fileURLWithPath: NSHomeDirectory() + "/logs/friday.log")) }
 }
 
-MainActor.assumeIsolated {
-    if CommandLine.arguments.contains("--selftest") { SelfTest.run(); RunLoop.main.run() }
-    let app = NSApplication.shared
-    let delegate = AppDelegate()
-    app.delegate = delegate
-    app.setActivationPolicy(.accessory)
-    withExtendedLifetime(delegate) { app.run() }
+/// จุดเข้าของ FridayCore.dylib — ตัวเปิดแอป (Launcher) โหลด dylib นี้แล้วเรียกฟังก์ชันนี้
+/// แยกแบบนี้เพื่อให้ตัวแอปที่ macOS ผูกสิทธิ์ไมค์ไว้ไม่เปลี่ยน → build ใหม่ไม่ต้องกด Allow ซ้ำ
+@_cdecl("friday_main")
+public func fridayMain() {
+    MainActor.assumeIsolated {
+        if CommandLine.arguments.contains("--selftest") { SelfTest.run(); RunLoop.main.run() }
+        let app = NSApplication.shared
+        let delegate = AppDelegate()
+        app.delegate = delegate
+        app.setActivationPolicy(.accessory)
+        withExtendedLifetime(delegate) { app.run() }
+    }
 }

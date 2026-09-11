@@ -42,7 +42,8 @@ enum AudioDevices {
     /// รายการผู้สมัครเรียงตามลำดับ: ตรงกับ priority (ชื่อบางส่วน ไม่สนตัวพิมพ์) ก่อน → default ของเครื่อง → ที่เหลือ
     /// ข้ามอุปกรณ์เสมือน (Teams/IG ฯลฯ) เว้นแต่ใส่ชื่อไว้ใน priority · ข้ามตัวที่ถูกพักไว้ (เช่น ไมค์เงียบสนิท)
     static func candidates(input: Bool, priority: [String], skip: Set<String> = []) -> [AudioDevice] {
-        let devs = all().filter { (input ? $0.usableInput : $0.usableOutput) && !skip.contains($0.name) }
+        // ข้ามอุปกรณ์ชั่วคราวที่ macOS สร้างเอง (CADefaultDeviceAggregate ตอนเปิด voice processing) — ไม่งั้นวนเลือกใหม่ไม่จบ
+        let devs = all().filter { (input ? $0.usableInput : $0.usableOutput) && !skip.contains($0.name) && !$0.name.hasPrefix("CADefaultDeviceAggregate") }
         func rank(_ d: AudioDevice) -> Int? { priority.firstIndex { d.name.localizedCaseInsensitiveContains($0) } }
         let listed = devs.filter { rank($0) != nil }.sorted { rank($0)! < rank($1)! }
         let def = defaultDevice(input: input)

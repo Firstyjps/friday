@@ -30,6 +30,7 @@ const TOOLS = [{
 const $ = (id) => document.getElementById(id);
 const orb = $('orb'), statusEl = $('status'), logEl = $('log');
 const CONVO = crypto.randomUUID();          // หนึ่งหน้า = หนึ่ง Claude session
+const NEEDS_TAP = 'needs-tap';
 const api = (path, body) => fetch(path, {
   method: body === undefined ? 'GET' : 'POST',
   headers: { 'Content-Type': 'application/json', 'X-Friday': '1' },
@@ -141,7 +142,12 @@ async function start() {
   setStatus('กำลังเชื่อมต่อ…');
   outCtx = new AudioContext();
   micCtx = new AudioContext();
-  await Promise.all([outCtx.resume(), micCtx.resume()]);
+  // iOS: resume() ค้างตลอดถ้ายังไม่มีการแตะจอ → ตัดที่ 1.5s แล้วให้ผู้ใช้แตะวงกลมแทน
+  const resumed = await Promise.race([
+    Promise.all([outCtx.resume(), micCtx.resume()]).then(() => true),
+    new Promise((r) => setTimeout(() => r(false), 1500)),
+  ]);
+  if (!resumed) throw new Error(NEEDS_TAP);
   micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 } });
   const { token } = await api('/api/token', {});
 
@@ -177,13 +183,19 @@ function stop() {
   orb.classList.remove('live'); setStatus('แตะวงกลมเพื่อเริ่มคุย');
 }
 
+let starting = false;
 orb.onclick = async () => {
+  if (starting) return;
   if (session) return stop();
-  try { await start(); } catch (e) { bubble('sys', '⚠️ ' + e.message); stop(); }
+  starting = true;
+  try { await start(); }
+  catch (e) {
+    stop();
+    if (e.message === NEEDS_TAP) setStatus('👆 แตะวงกลมเพื่อเริ่มคุย');
+    else bubble('sys', '⚠️ ' + e.message);
+  }
+  finally { starting = false; }
 };
 
-// เปิดจาก Shortcut "Friday" (?auto=1): ลองเริ่มเอง — iOS อาจบล็อกเสียงถ้าไม่มีการแตะ ก็ให้แตะวงกลมแทน
-if (new URLSearchParams(location.search).has('auto')) {
-  setStatus('แตะวงกลมเพื่อเริ่มคุย');
-  orb.click();
-}
+// เปิดจาก Shortcut "Friday" (?auto=1): ลองเริ่มเอง — iOS บล็อกเสียงถ้ายังไม่แตะจอ ก็จะกลับมารอให้แตะ
+if (new URLSearchParams(location.search).has('auto')) orb.click();

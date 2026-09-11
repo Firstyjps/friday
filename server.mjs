@@ -303,7 +303,6 @@ http.createServer(async (req, res) => {
       if (req.method === 'POST' && url.pathname === '/api/wake') {
         const r = await detectWake(await readRaw(req));
         if (r.wake) log(`WAKE | ${r.phrase}`);
-        else if (r.text) log(`hear | ${r.text.slice(0, 20)}${r.text.length > 20 ? '…' : ''}`);   // ชั่วคราว: ไว้ปรับคำปลุก (เก็บแค่ต้นประโยค)   // เก็บแค่คำปลุก ไม่เก็บประโยคที่ได้ยิน (บทสนทนากับ Friday จริงๆ log แยกในแอป)
         return json(res, 200, r);
       }
       if (req.method === 'POST' && url.pathname === '/api/mac') {

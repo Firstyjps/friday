@@ -19,14 +19,18 @@ enum SelfTest {
                     case .outputText(let t): text += t
                     case .toolCall(let id, let name, let args):
                         tool = "\(name) \(args)"; print("toolCall ✅ \(tool)")
-                        s.sendToolResponse(id: id, name: name, response: ["status": "done", "result": "มี 33 โฟลเดอร์ (selftest)"])
+                        if cfg.serverTools?.contains(name) == true {
+                            Task { let r = await ServerAPI.tool(name, args: args); print("  server → \(String(describing: r).prefix(120))"); s.sendToolResponse(id: id, name: name, response: r) }
+                        } else {
+                            s.sendToolResponse(id: id, name: name, response: ["status": "done", "result": "มี 33 โฟลเดอร์ (selftest)"])
+                        }
                     case .turnComplete where !tool.isEmpty:
-                        print("audio bytes=\(audioBytes) text=\(text)"); s.close(); exit(0)
+                        print("audio bytes=\(audioBytes) text=\(text)"); print("usage=\(s.usage)"); s.close(); exit(0)
                     case .closed(let why): print("closed: \(why)"); exit(tool.isEmpty ? 1 : 0)
                     default: break
                     }
                 }
-                s.connect(token: token, config: cfg)
+                s.connect(token: token, config: cfg, extraSystem: await ServerAPI.contextText())
                 try await Task.sleep(for: .seconds(40)); print("timeout audio=\(audioBytes) text=\(text) tool=\(tool)"); exit(2)
             } catch { print("error: \(error)"); exit(1) }
         }

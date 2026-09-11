@@ -19,13 +19,16 @@ final class LiveSession: NSObject, URLSessionWebSocketDelegate {
     private var setup: [String: Any] = [:]
     private var closedReported = false
 
-    func connect(token: String, config: ServerAPI.Config) {
+    /// token ที่ Gemini รายงาน (รวมทั้ง session) แยกตามชนิด → คิดค่าใช้จ่าย
+    private(set) var usage: [String: Int] = ["inText": 0, "inAudio": 0, "outText": 0, "outAudio": 0]
+
+    func connect(token: String, config: ServerAPI.Config, extraSystem: String = "") {
         let q = token.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? token
         let url = URL(string: "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=\(q)")!
         setup = ["setup": [
             "model": "models/\(config.model)",
             "generationConfig": generationConfig(config),
-            "systemInstruction": ["parts": [["text": config.system]]],
+            "systemInstruction": ["parts": [["text": config.system + extraSystem]]],
             "tools": config.tools.any,
             "inputAudioTranscription": [:] as [String: Any],
             "outputAudioTranscription": [:] as [String: Any],
@@ -111,6 +114,14 @@ final class LiveSession: NSObject, URLSessionWebSocketDelegate {
 
     private func handle(_ m: [String: Any]) {
         if m["setupComplete"] != nil { onEvent?(.open) }
+        if let u = m["usageMetadata"] as? [String: Any] {
+            for (key, dir) in [("promptTokensDetails", "in"), ("responseTokensDetails", "out")] {
+                for d in u[key] as? [[String: Any]] ?? [] {
+                    let kind = (d["modality"] as? String ?? "").uppercased() == "AUDIO" ? "Audio" : "Text"
+                    usage[dir + kind, default: 0] += d["tokenCount"] as? Int ?? 0
+                }
+            }
+        }
         if let tc = m["toolCall"] as? [String: Any], let calls = tc["functionCalls"] as? [[String: Any]] {
             for c in calls {
                 onEvent?(.toolCall(id: c["id"] as? String ?? "", name: c["name"] as? String ?? "", args: c["args"] as? [String: Any] ?? [:]))

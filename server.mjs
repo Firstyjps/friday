@@ -2,7 +2,7 @@
 // + /api/mac: รับงานจาก tool run_on_mac → รัน Claude Code บน Mac → คืนผล (+ Telegram สำรอง)
 import http from 'node:http';
 import { spawn } from 'node:child_process';
-import { readFile, appendFile, mkdir } from 'node:fs/promises';
+import { readFile, appendFile, mkdir, readdir } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { extname, join } from 'node:path';
@@ -270,6 +270,64 @@ const readRaw = (req, max = 32000 * 10) => new Promise((resolve, reject) => {
   req.on('end', () => resolve(Buffer.concat(chunks))); req.on('error', reject);
 });
 
+// ---------- ความจำ / Vault / ค่าใช้จ่าย (tools ฝั่ง server) ----------
+const DATA = join(import.meta.dirname, 'data');
+const MEMORY = join(DATA, 'memory.md');           // สิ่งที่ Friday จดไว้ (tool remember)
+const USAGE = join(DATA, 'usage.jsonl');          // ค่าใช้จ่ายแต่ละ session
+const CHAT = join(HOME, 'logs', 'friday-chat.log');
+const VAULT = join(HOME, 'Vault', '10-projects');
+const readText = (f) => readFile(f, 'utf8').catch(() => '');
+const today = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Bangkok' });
+
+/// ส่งให้ Friday ตอนเริ่มคุย: ความจำ + บทสนทนาล่าสุด 3 วัน
+async function context() {
+  const memory = (await readText(MEMORY)).trim().split('\n').slice(-60).join('\n');
+  const since = Date.now() - 3 * 86400e3;
+  const recent = (await readText(CHAT)).trim().split('\n')
+    .filter((l) => Date.parse(l.slice(0, 20)) > since).slice(-30)
+    .map((l) => l.replace(/^(\S+)T(\d\d:\d\d)\S* \| /, '$1 $2 ')).join('\n');
+  return { memory, recent };
+}
+
+async function vaultLookup(query) {
+  const terms = String(query).toLowerCase().split(/[\s,/]+/).filter((t) => t.length > 1);
+  const files = (await readdir(VAULT).catch(() => [])).filter((f) => f.endsWith('.md'));
+  let best = null;
+  for (const f of files) {
+    const body = await readText(join(VAULT, f));
+    const low = body.toLowerCase(), name = f.toLowerCase();
+    const score = terms.reduce((n, t) => n + (name.includes(t) ? 10 : 0) + Math.min(low.split(t).length - 1, 5), 0);
+    if (score > 0 && (!best || score > best.score)) best = { f, body, score };
+  }
+  if (!best) return { found: false, result: `ไม่เจอโปรเจกต์ที่ตรงกับ "${query}" ใน Vault` };
+  const text = best.body.replace(/^---[\s\S]*?---\n/, '').slice(0, 1800);
+  return { found: true, file: best.f, result: text };
+}
+
+async function usageSummary() {
+  const cfg = JSON.parse(await readText(join(PUBLIC, 'config.json')) || '{}');
+  const p = cfg.pricing ?? { inText: 0.75, inAudio: 3, outText: 4.5, outAudio: 12 };
+  const month = today().slice(0, 7);
+  const rows = (await readText(USAGE)).trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((r) => r.date?.startsWith(month));
+  const sum = (k) => rows.reduce((n, r) => n + (r[k] || 0), 0);
+  const usd = (sum('inText') * p.inText + sum('inAudio') * p.inAudio + sum('outText') * p.outText + sum('outAudio') * p.outAudio) / 1e6;
+  const todayUsd = rows.filter((r) => r.date === today()).reduce((n, r) => n + ((r.inText || 0) * p.inText + (r.inAudio || 0) * p.inAudio + (r.outText || 0) * p.outText + (r.outAudio || 0) * p.outAudio) / 1e6, 0);
+  return { month, sessions: rows.length, minutes: +(sum('seconds') / 60).toFixed(1), usd: +usd.toFixed(3), todayUsd: +todayUsd.toFixed(3),
+           thb: Math.round(usd * 33 * 10) / 10, note: 'ประมาณจาก token ที่ Gemini รายงาน (ราคา Gemini 3.1 Flash Live, ไม่มี free tier)' };
+}
+
+const serverTools = {
+  remember: async ({ note }) => {
+    if (!note) return { ok: false };
+    await mkdir(DATA, { recursive: true });
+    await appendFile(MEMORY, `- ${today()} ${String(note).replace(/\n/g, ' ').slice(0, 300)}\n`);
+    log(`MEMORY + ${note}`);
+    return { ok: true, result: 'จดไว้แล้ว' };
+  },
+  vault_lookup: async ({ query }) => vaultLookup(query || ''),
+  get_usage: async () => usageSummary(),
+};
+
 // ---------- HTTP ----------
 const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
 const readBody = (req) => new Promise((resolve, reject) => {
@@ -297,6 +355,16 @@ http.createServer(async (req, res) => {
         return json(res, 200, { wake });
       }
       if (req.method === 'POST' && url.pathname === '/api/token') return json(res, 200, { token: await createToken() });
+      if (req.method === 'GET' && url.pathname === '/api/context') return json(res, 200, await context());
+      if (req.method === 'GET' && url.pathname === '/api/usage') return json(res, 200, await usageSummary());
+      if (req.method === 'POST' && url.pathname === '/api/usage') {
+        const u = await readBody(req);
+        const row = { date: today(), seconds: +u.seconds || 0, inText: +u.inText || 0, inAudio: +u.inAudio || 0, outText: +u.outText || 0, outAudio: +u.outAudio || 0, app: String(u.app || '') };
+        await mkdir(DATA, { recursive: true }); await appendFile(USAGE, JSON.stringify(row) + '\n');
+        return json(res, 200, { ok: true });
+      }
+      const t = url.pathname.match(/^\/api\/tool\/(\w+)$/);
+      if (req.method === 'POST' && t && serverTools[t[1]]) return json(res, 200, await serverTools[t[1]](await readBody(req)));
       if (req.method === 'POST' && url.pathname === '/api/ping') {   // heartbeat จากหน้าโหมดห้อง (debug)
         const b = await readBody(req); roomSeenAt = Date.now(); if (b.track !== 'live' || b.ctx !== 'running') log(`ping ⚠️ | ${JSON.stringify(b)}`); return json(res, 200, { ok: true });
       }

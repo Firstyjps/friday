@@ -36,6 +36,8 @@ final class FridayController: ObservableObject {
     private var friTurn = ""                      // คำตอบล่าสุดของ Friday (บางทีโมเดลพิมพ์ชื่อ tool ออกมาแทนการเรียก)
     private var ending = false
     private var pendingMute = false
+    private var sessionStart: Date?
+    @Published var usageLine = ""
     private let convo = UUID().uuidString          // หนึ่งรอบเปิดแอป = หนึ่ง Claude session (จำงานก่อนหน้าได้)
 
     private var connectQueue: [Data] = []
@@ -81,6 +83,7 @@ final class FridayController: ObservableObject {
             } }
             audio.onFailure = { [weak self] in Task { @MainActor in await self?.openAudio() } }
             await openAudio()
+            usageLine = await ServerAPI.usageLine() ?? ""
             let woke = await ServerAPI.hello()          // ถูกเปิดเพราะหูเบื้องหลังของ server ได้ยิน "Friday"?
             if woke { wake(prebuffer: [], greet: true) }
         }
@@ -196,10 +199,12 @@ final class FridayController: ObservableObject {
         Task {
             do {
                 let token = try await ServerAPI.token()
+                let extra = await ServerAPI.contextText()       // ความจำ + บทสนทนาล่าสุด
                 let s = LiveSession()
                 s.onEvent = { [weak self] e in MainActor.assumeIsolated { self?.onLive(e) } }
                 live = s
-                s.connect(token: token, config: config)
+                sessionStart = Date()
+                s.connect(token: token, config: config, extraSystem: extra)
                 pendingGreeting = greet
             } catch {
                 sys("⚠️ เชื่อมต่อไม่ได้: \(error.localizedDescription)")
@@ -240,6 +245,11 @@ final class FridayController: ObservableObject {
 
     func endSession() {
         Log.write("session: end")
+        if let s = live, let t0 = sessionStart {           // ส่งค่าใช้จ่ายของ session นี้ให้ server
+            var u: [String: Any] = s.usage.mapValues { $0 }; u["seconds"] = Int(Date().timeIntervalSince(t0)); u["app"] = "mac"
+            Task { await ServerAPI.reportUsage(u); usageLine = await ServerAPI.usageLine() ?? usageLine; onPhaseChanged?(phase) }
+        }
+        sessionStart = nil
         ending = false; userTurn = ""
         live?.close(); live = nil
         audio.flush()
@@ -286,6 +296,9 @@ final class FridayController: ObservableObject {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in self?.flushResults() }
         case .toolCall(let id, let name, let args):
             if name == "run_on_mac" { runOnMac(id: id, name: name, task: args["task"] as? String ?? "") }
+            else if config?.serverTools?.contains(name) == true {     // remember / vault_lookup / get_usage
+                Task { let r = await ServerAPI.tool(name, args: args); live?.sendToolResponse(id: id, name: name, response: r) }
+            }
             else if name == "end_conversation" || name == "stop_listening" {
                 live?.sendToolResponse(id: id, name: name, response: ["status": "ok"])
                 endAfterSpeech(mute: name == "stop_listening")

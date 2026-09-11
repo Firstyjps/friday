@@ -78,7 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         m.addItem(withTitle: talking ? "หยุดคุย" : "คุยกับ Friday  (⌥⌘F)", action: #selector(toggleTalk), keyEquivalent: "").target = self
         m.addItem(withTitle: "แสดงหน้าต่าง", action: #selector(showWindow), keyEquivalent: "").target = self
         m.addItem(.separator())
-        for line in ["🔊 \(controller.outputName.isEmpty ? "-" : controller.outputName)", "🎤 \(controller.inputName.isEmpty ? "-" : controller.inputName)"] {
+        for line in ["🔊 \(controller.outputName.isEmpty ? "-" : controller.outputName)", "🎤 \(controller.inputName.isEmpty ? "-" : controller.inputName)", "💰 \(controller.usageLine.isEmpty ? "-" : controller.usageLine)"] {
             let it = NSMenuItem(title: line, action: nil, keyEquivalent: ""); it.isEnabled = false; m.addItem(it)
         }
         m.addItem(.separator())

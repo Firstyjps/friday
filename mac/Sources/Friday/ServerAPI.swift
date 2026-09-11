@@ -24,6 +24,7 @@ enum ServerAPI {
         var inputPriority: [String]? = nil
         var farewell: String? = nil
         var speechConfig: JSONValue? = nil
+        var serverTools: [String]? = nil
     }
 
     enum APIError: LocalizedError {
@@ -96,6 +97,33 @@ enum ServerAPI {
         let done = DispatchSemaphore(value: 0)
         URLSession.shared.dataTask(with: req) { _, _, _ in done.signal() }.resume()
         _ = done.wait(timeout: .now() + 2)
+    }
+
+    /// ความจำ + บทสนทนาล่าสุด → ต่อท้าย system prompt ตอนเริ่มคุย
+    static func contextText() async -> String {
+        guard let data = try? await request("/api/context"),
+              let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return "" }
+        var out = ""
+        if let m = o["memory"] as? String, !m.isEmpty { out += "\n\nความจำ (สิ่งที่เคยจดไว้):\n\(m)" }
+        if let r = o["recent"] as? String, !r.isEmpty { out += "\n\nบทสนทนาล่าสุด (3 วัน):\n\(r)" }
+        return out
+    }
+
+    /// tools ที่ server ทำให้ (remember / vault_lookup / get_usage)
+    static func tool(_ name: String, args: [String: Any]) async -> [String: Any] {
+        guard let data = try? await request("/api/tool/\(name)", method: "POST", json: args),
+              let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return ["ok": false, "result": "server ไม่ตอบ"] }
+        return o
+    }
+
+    static func reportUsage(_ u: [String: Any]) async {
+        _ = try? await request("/api/usage", method: "POST", json: u)
+    }
+
+    static func usageLine() async -> String? {
+        guard let data = try? await request("/api/usage"),
+              let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return "เดือนนี้ \(o["minutes"] ?? 0) นาที · ≈ ฿\(o["thb"] ?? 0) ($\(o["usd"] ?? 0))"
     }
 
     static func ping(_ info: [String: Any]) async {

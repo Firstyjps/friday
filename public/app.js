@@ -164,6 +164,10 @@ function onMessage(msg) {
   for (const fc of msg.toolCall?.functionCalls ?? []) {
     if (fc.name === 'run_on_mac') runOnMac(fc);
     else if (fc.name === 'confirm_task') confirmTask(fc);
+    else if (CFG.serverTools?.includes(fc.name)) {                     // remember / vault_lookup / get_usage
+      api(`/api/tool/${fc.name}`, fc.args ?? {}).catch((e) => ({ ok: false, result: e.message }))
+        .then((r) => session?.sendToolResponse({ functionResponses: [{ id: fc.id, name: fc.name, response: r }] }));
+    }
     else if (fc.name === 'end_conversation' || fc.name === 'stop_listening') {   // เว็บ: จบบทสนทนาหลัง Friday พูดลาจบ
       session?.sendToolResponse({ functionResponses: [{ id: fc.id, name: fc.name, response: { status: 'ok' } }] });
       endAfterSpeech();
@@ -230,13 +234,16 @@ async function openSession(prebuffer = []) {
   setStatus('กำลังเชื่อมต่อ…');
   try {
     const { token } = await api('/api/token', {});
+    const ctx = await api('/api/context').catch(() => ({}));            // ความจำ + บทสนทนาล่าสุด
+    const extra = (ctx.memory ? `\n\nความจำ (สิ่งที่เคยจดไว้):\n${ctx.memory}` : '') + (ctx.recent ? `\n\nบทสนทนาล่าสุด (3 วัน):\n${ctx.recent}` : '');
+    usage = { inText: 0, inAudio: 0, outText: 0, outAudio: 0 }; sessionStart = Date.now();
     const ai = new GoogleGenAI({ apiKey: token, httpOptions: { apiVersion: 'v1alpha' } });
     session = await ai.live.connect({
       model: MODEL,
       config: {
         responseModalities: [Modality.AUDIO],
         ...(CFG.speechConfig ? { speechConfig: CFG.speechConfig } : {}),
-        systemInstruction: SYSTEM,
+        systemInstruction: SYSTEM + extra,
         tools: TOOLS,
         inputAudioTranscription: {},
         outputAudioTranscription: {},
@@ -244,7 +251,7 @@ async function openSession(prebuffer = []) {
       },
       callbacks: {
         onopen: () => { setStatus('ฟังอยู่… พูดได้เลย'); orb.classList.add('live'); },
-        onmessage: (m) => { lastActivity = Date.now(); onMessage(m); },
+        onmessage: (m) => { lastActivity = Date.now(); countUsage(m); onMessage(m); },
         onerror: (e) => { bubble('sys', 'error: ' + (e.message || e)); },
         onclose: (e) => { if (session) { bubble('sys', 'ปิดการเชื่อมต่อ' + (e.reason ? ': ' + e.reason : '')); endSession(); } },
       },
@@ -254,7 +261,16 @@ async function openSession(prebuffer = []) {
   while (connectQueue.length) sendAudio(connectQueue.shift());   // เสียงที่พูดตอนปลุก/ระหว่างต่อ → ส่งให้ Gemini ฟังด้วย
 }
 
+let usage = null, sessionStart = 0;
+function countUsage(m) {
+  const u = m.usageMetadata; if (!u || !usage) return;
+  for (const [key, dir] of [['promptTokensDetails', 'in'], ['responseTokensDetails', 'out']])
+    for (const d of u[key] ?? []) usage[dir + (String(d.modality).toUpperCase() === 'AUDIO' ? 'Audio' : 'Text')] += d.tokenCount || 0;
+}
+
 function endSession() {
+  if (session && usage) api('/api/usage', { ...usage, seconds: Math.round((Date.now() - sessionStart) / 1000), app: 'web' }).catch(() => {});
+  usage = null;
   const s = session; session = null; try { s?.close(); } catch {}
   stopPlayback(); orb.classList.remove('live'); meBubble = friBubble = null;
   setStatus(ROOM ? '💤 รอคำปลุก "Friday"' : 'แตะวงกลมเพื่อเริ่มคุย');

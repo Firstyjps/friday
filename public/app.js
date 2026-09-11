@@ -1,52 +1,12 @@
 // Friday client — ไมค์ (PCM16 16kHz) → Gemini Live → เสียงตอบ (PCM16 24kHz)
 // tool run_on_mac → /api/mac → Claude Code บน Mac
-import { GoogleGenAI, Modality, Type } from 'https://cdn.jsdelivr.net/npm/@google/genai@2.22.0/+esm';
+import { GoogleGenAI, Modality } from 'https://cdn.jsdelivr.net/npm/@google/genai@2.22.0/+esm';
 
-const MODEL = 'gemini-3.1-flash-live-preview';
-const SYSTEM = `คุณคือ Friday ผู้ช่วยส่วนตัวของผู้ใช้ พูดภาษาไทยเป็นหลัก เป็นกันเอง กระชับ
-ตอบเหมือนคุยกันด้วยเสียง: ประโยคสั้น ไม่อ่านสัญลักษณ์หรือ markdown ไม่ร่ายยาว
-
-คุณมีเครื่องมือ run_on_mac ที่สั่งงานบน Mac ของผู้ใช้ผ่าน Claude Code (ทำได้แทบทุกอย่างบนเครื่อง:
-เปิดแอป/ไฟล์/เว็บ, ค้นหาและสรุปไฟล์, เขียนโค้ด, รันคำสั่ง, จัดการโปรเจกต์, อ่านโน้ตใน Vault ฯลฯ)
-- เมื่อผู้ใช้ขอให้ทำอะไรบน Mac หรือถามข้อมูลที่อยู่ในเครื่อง ให้เรียก run_on_mac ทันที อย่าบอกว่าทำไม่ได้
-- เขียน task เป็นคำสั่งภาษาไทยที่ชัดเจนและครบ (แก้คำที่ฟังผิดให้ถูกตามบริบท)
-- ถ้าผู้ใช้พูดว่า "ทำต่อ" หรืออ้างถึงงานก่อนหน้า ให้ส่งต่อไปได้เลย Claude จำงานก่อนหน้าในบทสนทนานี้ได้
-- ถ้าผลกลับมาเป็น status "running" แปลว่างานยังทำอยู่ ให้บอกผู้ใช้สั้นๆ ว่ากำลังทำ แล้วคุยต่อได้ ผลจะถูกส่งมาให้ภายหลัง
-- เมื่อได้รับข้อความขึ้นต้นด้วย [ผลจาก Mac] ให้สรุปผลนั้นให้ผู้ใช้ฟังสั้นๆ ทันที
-- คำถามทั่วไปที่ไม่เกี่ยวกับเครื่อง ตอบเองได้เลย ไม่ต้องใช้เครื่องมือ
-
-ด่านความปลอดภัย:
-- ถ้า run_on_mac ตอบกลับ status "needs_confirmation" ให้ทวนงานนั้นให้ผู้ใช้ฟังสั้นๆ แล้วถามว่า "ยืนยันไหม"
-- รอให้ผู้ใช้ตอบก่อนเสมอ ห้ามเดาหรือยืนยันแทนผู้ใช้
-- ผู้ใช้ตอบตกลง → เรียก confirm_task(job_id, approve=true) · ผู้ใช้ปฏิเสธหรือไม่แน่ใจ → confirm_task(job_id, approve=false)
-- ถ้า confirm_task ตอบว่ายังไม่ได้ยินผู้ใช้ยืนยัน ให้ถามผู้ใช้อีกครั้ง`;
-
-const TOOLS = [{
-  functionDeclarations: [{
-    name: 'run_on_mac',
-    description: 'สั่งงานบน Mac ของผู้ใช้ผ่าน Claude Code แล้วได้ผลลัพธ์กลับมา ใช้กับทุกงานที่เกี่ยวกับเครื่อง ไฟล์ แอป โค้ด หรือข้อมูลส่วนตัวในเครื่อง',
-    parameters: {
-      type: Type.OBJECT,
-      properties: { task: { type: Type.STRING, description: 'คำสั่งงานภาษาไทยที่ชัดเจนและครบถ้วน' } },
-      required: ['task'],
-    },
-  }, {
-    name: 'confirm_task',
-    description: 'ยืนยันหรือยกเลิกงานที่ run_on_mac ตอบว่า needs_confirmation — เรียกหลังผู้ใช้ตอบด้วยเสียงแล้วเท่านั้น',
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        job_id: { type: Type.STRING, description: 'job_id ที่ได้จาก run_on_mac' },
-        approve: { type: Type.BOOLEAN, description: 'true ถ้าผู้ใช้ตอบตกลง, false ถ้าปฏิเสธ' },
-      },
-      required: ['job_id', 'approve'],
-    },
-  }],
-}];
-
-// ผู้ใช้ต้องพูดคำยืนยันเองจริงๆ (เช็คจาก transcript เสียงผู้ใช้ ไม่เชื่อ Gemini อย่างเดียว)
-const AFFIRM = /(ใช่|ยืนยัน|ตกลง|โอเค|เอาเลย|ได้เลย|ทำเลย|ทำได้|จัดไป|เอา|\b(yes|yeah|ok|okay|confirm|sure|go ahead)\b)/i;
-const NEGATE = /(ไม่|อย่า|ยกเลิก|หยุด|รอก่อน|\b(no|nope|cancel|stop|wait)\b)/i;
+// prompt / tools / คำยืนยัน อยู่ที่ config.json ไฟล์เดียว (ใช้ร่วมกับแอป Mac)
+const CFG = await fetch('config.json', { cache: 'no-cache' }).then((r) => r.json());
+const { model: MODEL, system: SYSTEM, tools: TOOLS } = CFG;
+const AFFIRM = new RegExp(CFG.affirm, 'i');
+const NEGATE = new RegExp(CFG.negate, 'i');
 const confirms = new Map();                  // job_id → { task, card, heard }
 
 const $ = (id) => document.getElementById(id);
@@ -220,7 +180,7 @@ function onMessage(msg) {
 // ---------- audio pipeline (ไมค์ + ลำโพง) — แยกจาก Gemini session เพื่อให้โหมดห้องฟังคำปลุกได้ตลอด ----------
 const ROOM = new URLSearchParams(location.search).has('room');
 let micNode = null, lastActivity = 0;
-const idleMs = 20000;                          // โหมดห้อง: เงียบเกินนี้ → ปิด session กลับไปรอคำปลุก
+const idleMs = CFG.idleMs;                          // โหมดห้อง: เงียบเกินนี้ → ปิด session กลับไปรอคำปลุก
 
 async function openAudio() {
   // เปิดไมค์ก่อน: iOS/WebKit ยอมให้เล่นเสียงโดยไม่ต้องแตะจอ ถ้าหน้าเว็บกำลังใช้ไมค์อยู่
@@ -373,7 +333,7 @@ if (ROOM) {
     if (wake && !session) {
       chime(); bubble('sys', '👂 เรียกแล้ว');
       await openSession();
-      session?.sendRealtimeInput({ text: '[ผู้ใช้เพิ่งเรียกชื่อคุณ "Friday" — ทักทายสั้นๆ แล้วถามว่าให้ช่วยอะไร]' });
+      session?.sendRealtimeInput({ text: CFG.greeting });
     }
   }).catch((e) => setStatus(e.message === NEEDS_TAP ? '👆 แตะวงกลมหนึ่งครั้งเพื่อเปิดโหมดห้อง' : '⚠️ ' + e.message));
   // ปิดหน้าต่าง → บอก server ให้หูเบื้องหลังฟังแทนทันที

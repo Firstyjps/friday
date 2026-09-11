@@ -13,7 +13,13 @@ const SYSTEM = `คุณคือ Friday ผู้ช่วยส่วนต�
 - ถ้าผู้ใช้พูดว่า "ทำต่อ" หรืออ้างถึงงานก่อนหน้า ให้ส่งต่อไปได้เลย Claude จำงานก่อนหน้าในบทสนทนานี้ได้
 - ถ้าผลกลับมาเป็น status "running" แปลว่างานยังทำอยู่ ให้บอกผู้ใช้สั้นๆ ว่ากำลังทำ แล้วคุยต่อได้ ผลจะถูกส่งมาให้ภายหลัง
 - เมื่อได้รับข้อความขึ้นต้นด้วย [ผลจาก Mac] ให้สรุปผลนั้นให้ผู้ใช้ฟังสั้นๆ ทันที
-- คำถามทั่วไปที่ไม่เกี่ยวกับเครื่อง ตอบเองได้เลย ไม่ต้องใช้เครื่องมือ`;
+- คำถามทั่วไปที่ไม่เกี่ยวกับเครื่อง ตอบเองได้เลย ไม่ต้องใช้เครื่องมือ
+
+ด่านความปลอดภัย:
+- ถ้า run_on_mac ตอบกลับ status "needs_confirmation" ให้ทวนงานนั้นให้ผู้ใช้ฟังสั้นๆ แล้วถามว่า "ยืนยันไหม"
+- รอให้ผู้ใช้ตอบก่อนเสมอ ห้ามเดาหรือยืนยันแทนผู้ใช้
+- ผู้ใช้ตอบตกลง → เรียก confirm_task(job_id, approve=true) · ผู้ใช้ปฏิเสธหรือไม่แน่ใจ → confirm_task(job_id, approve=false)
+- ถ้า confirm_task ตอบว่ายังไม่ได้ยินผู้ใช้ยืนยัน ให้ถามผู้ใช้อีกครั้ง`;
 
 const TOOLS = [{
   functionDeclarations: [{
@@ -24,8 +30,24 @@ const TOOLS = [{
       properties: { task: { type: Type.STRING, description: 'คำสั่งงานภาษาไทยที่ชัดเจนและครบถ้วน' } },
       required: ['task'],
     },
+  }, {
+    name: 'confirm_task',
+    description: 'ยืนยันหรือยกเลิกงานที่ run_on_mac ตอบว่า needs_confirmation — เรียกหลังผู้ใช้ตอบด้วยเสียงแล้วเท่านั้น',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        job_id: { type: Type.STRING, description: 'job_id ที่ได้จาก run_on_mac' },
+        approve: { type: Type.BOOLEAN, description: 'true ถ้าผู้ใช้ตอบตกลง, false ถ้าปฏิเสธ' },
+      },
+      required: ['job_id', 'approve'],
+    },
   }],
 }];
+
+// ผู้ใช้ต้องพูดคำยืนยันเองจริงๆ (เช็คจาก transcript เสียงผู้ใช้ ไม่เชื่อ Gemini อย่างเดียว)
+const AFFIRM = /(ใช่|ยืนยัน|ตกลง|โอเค|เอาเลย|ได้เลย|ทำเลย|ทำได้|จัดไป|เอา|\b(yes|yeah|ok|okay|confirm|sure|go ahead)\b)/i;
+const NEGATE = /(ไม่|อย่า|ยกเลิก|หยุด|รอก่อน|\b(no|nope|cancel|stop|wait)\b)/i;
+const confirms = new Map();                  // job_id → { task, card, heard }
 
 const $ = (id) => document.getElementById(id);
 const orb = $('orb'), statusEl = $('status'), logEl = $('log');
@@ -88,23 +110,68 @@ function playPcm(b64) {
 function stopPlayback() { for (const s of playing) try { s.stop(); } catch {} playing.clear(); playHead = 0; orb.classList.remove('speaking'); }
 
 // ---------- tool: run_on_mac ----------
+// แปลงสถานะงานจาก server → การ์ดบนจอ + ข้อความตอบ Gemini
+function jobToResponse(job, card) {
+  if (job.status === 'running') {
+    card.textContent = `⏳ Mac กำลังทำ: ${job.task}`;
+    pollJob(job.id, card);
+    return { status: 'running', note: 'งานยังไม่เสร็จ ผลจะส่งตามมาภายหลัง' };
+  }
+  if (job.status === 'needs_confirmation') {
+    showConfirm(job, card);
+    return { status: 'needs_confirmation', job_id: job.id, task: job.task, note: 'งานนี้เสี่ยง ทวนงานให้ผู้ใช้ฟังแล้วถามว่ายืนยันไหม รอผู้ใช้ตอบก่อนเรียก confirm_task' };
+  }
+  card.replaceChildren(`${{ done: '✅', cancelled: '🚫' }[job.status] ?? '⚠️'} ${job.task}`);
+  return { status: job.status, result: job.result };
+}
+
 async function runOnMac(fc) {
   const task = fc.args?.task || '';
   const card = bubble('sys', `🖥️ สั่ง Mac: ${task}`);
   let resp;
-  try {
-    const job = await api('/api/mac', { task, convo: CONVO });
-    if (job.status === 'running') {
-      card.textContent = `⏳ Mac กำลังทำ: ${task}`;
-      pollJob(job.id, card);
-      resp = { status: 'running', note: 'งานยังไม่เสร็จ ผลจะส่งตามมาภายหลัง' };
-    } else {
-      card.textContent = `${job.status === 'done' ? '✅' : '⚠️'} ${task}`;
-      resp = { status: job.status, result: job.result };
-    }
-  } catch (e) {
-    card.textContent = `⚠️ ส่งงานไม่ได้: ${e.message}`;
-    resp = { status: 'error', result: e.message };
+  try { resp = jobToResponse(await api('/api/mac', { task, convo: CONVO }), card); }
+  catch (e) { card.textContent = `⚠️ ส่งงานไม่ได้: ${e.message}`; resp = { status: 'error', result: e.message }; }
+  session?.sendToolResponse({ functionResponses: [{ id: fc.id, name: fc.name, response: resp }] });
+}
+
+function showConfirm(job, card) {
+  card.className = 'sys confirm';
+  card.replaceChildren(`⚠️ ต้องยืนยัน: ${job.task}`);
+  const row = document.createElement('div'); row.className = 'btns';
+  const yes = document.createElement('button'); yes.textContent = '✅ ยืนยัน';
+  const no = document.createElement('button'); no.textContent = '❌ ยกเลิก';
+  yes.onclick = () => decide(job.id, true, 'ปุ่ม');
+  no.onclick = () => decide(job.id, false, 'ปุ่ม');
+  row.append(yes, no); card.append(row);
+  confirms.set(job.id, { task: job.task, card, heard: '' });
+}
+
+// ยืนยัน/ยกเลิกจริงที่ server — เรียกจากปุ่มบนจอหรือจาก confirm_task (หลังผ่านการเช็คเสียง)
+async function decide(id, approve, via) {
+  const c = confirms.get(id); if (!c) return null;
+  confirms.delete(id);
+  c.card.className = 'sys';
+  c.card.replaceChildren(`${approve ? '▶️ ยืนยันแล้ว' : '🚫 ยกเลิก'} (${via}): ${c.task}`);
+  const job = await api(`/api/mac/${id}/confirm`, { approve });
+  if (via === 'ปุ่ม') {                        // Gemini ไม่รู้ว่ากดปุ่ม → แจ้งให้รู้
+    if (job.status === 'running') pollJob(job.id, c.card);
+    else { pendingResults.push(`[ผลจาก Mac] งาน "${job.task}" ${approve ? `ผู้ใช้กดยืนยันแล้ว ผล: ${job.result}` : 'ผู้ใช้กดยกเลิกแล้ว'}`); flushResults(); }
+  }
+  return job;
+}
+
+async function confirmTask(fc) {
+  const { job_id: id, approve } = fc.args ?? {};
+  const c = confirms.get(id);
+  let resp;
+  if (!c) resp = { status: 'error', result: 'ไม่พบงานที่รอยืนยัน (อาจยืนยัน/ยกเลิกไปแล้ว หรือหมดเวลา)' };
+  else if (approve && !(AFFIRM.test(c.heard) && !NEGATE.test(c.heard))) {
+    resp = { status: 'not_confirmed', result: 'ยังไม่ได้ยินผู้ใช้พูดยืนยันชัดเจน ให้ถามผู้ใช้อีกครั้ง' };
+  } else {
+    try {
+      const job = await decide(id, !!approve, 'เสียง');
+      resp = approve ? jobToResponse(job, c.card) : { status: 'cancelled', result: 'ยกเลิกงานแล้ว' };
+    } catch (e) { resp = { status: 'error', result: e.message }; }
   }
   session?.sendToolResponse({ functionResponses: [{ id: fc.id, name: fc.name, response: resp }] });
 }
@@ -114,7 +181,7 @@ async function pollJob(id, card) {
     await new Promise((r) => setTimeout(r, 3000));
     let job; try { job = await api(`/api/mac/${id}`); } catch { continue; }
     if (job.status === 'running') continue;
-    card.textContent = `${job.status === 'done' ? '✅' : '⚠️'} ${job.task}`;
+    card.replaceChildren(`${job.status === 'done' ? '✅' : '⚠️'} ${job.task}`);
     pendingResults.push(`[ผลจาก Mac] งาน "${job.task}" ${job.status === 'done' ? 'เสร็จแล้ว' : 'ผิดพลาด'}: ${job.result}`);
     flushResults();
     return;
@@ -129,11 +196,17 @@ function flushResults() {
 
 // ---------- session ----------
 function onMessage(msg) {
-  if (msg.toolCall) for (const fc of msg.toolCall.functionCalls ?? []) if (fc.name === 'run_on_mac') runOnMac(fc);
+  for (const fc of msg.toolCall?.functionCalls ?? []) {
+    if (fc.name === 'run_on_mac') runOnMac(fc);
+    else if (fc.name === 'confirm_task') confirmTask(fc);
+  }
   const sc = msg.serverContent;
   if (sc?.interrupted) stopPlayback();
   for (const p of sc?.modelTurn?.parts ?? []) if (p.inlineData?.data) playPcm(p.inlineData.data);
-  if (sc?.inputTranscription?.text) { meBubble ??= bubble('me'); meBubble.textContent += sc.inputTranscription.text; friBubble = null; }
+  if (sc?.inputTranscription?.text) {
+    meBubble ??= bubble('me'); meBubble.textContent += sc.inputTranscription.text; friBubble = null;
+    for (const c of confirms.values()) c.heard += sc.inputTranscription.text;   // เก็บเสียงผู้ใช้หลังถามยืนยัน
+  }
   if (sc?.outputTranscription?.text) { friBubble ??= bubble('fri'); friBubble.textContent += sc.outputTranscription.text; meBubble = null; }
   if (sc?.turnComplete) { meBubble = null; friBubble = null; setTimeout(flushResults, 800); }
 }

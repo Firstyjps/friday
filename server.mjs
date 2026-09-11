@@ -60,14 +60,32 @@ async function telegram(text) {
 const jobs = new Map();       // id → { id, convo, task, status, result, startedAt, promise }
 const convos = new Map();     // convo → { claudeSession, tail: Promise }
 
-const VOICE_RULES = `\n\n[คำสั่งนี้มาจากผู้ใช้ผ่านผู้ช่วยเสียง Friday — ทำงานให้เสร็จ แล้วจบด้วยสรุปผลภาษาไทยสั้นๆ 1-3 ประโยคแบบภาษาพูด ไม่ใช้ markdown/ตาราง/โค้ดบล็อก เพราะจะถูกอ่านออกเสียง]`;
+const VOICE_RULES = `\n\n[คำสั่งนี้มาจากผู้ใช้ผ่านผู้ช่วยเสียง Friday (ถอดจากเสียง อาจฟังผิดได้) — ทำงานให้เสร็จ แล้วจบด้วยสรุปผลภาษาไทยสั้นๆ 1-3 ประโยคแบบภาษาพูด ไม่ใช้ markdown/ตาราง/โค้ดบล็อก เพราะจะถูกอ่านออกเสียง
+กฎความปลอดภัย: ทำเฉพาะสิ่งที่สั่งตรงๆ เท่านั้น ถ้างานต้องทำสิ่งที่ย้อนกลับไม่ได้หรือกระทบภายนอก (ลบ/เขียนทับไฟล์, ส่งข้อความหาคนอื่น, เงิน/เทรด, deploy/push, แก้ระบบ) ที่ไม่ได้ถูกสั่งไว้ชัดเจน ให้หยุดแล้วรายงานกลับว่าต้องให้ผู้ใช้ยืนยันอะไร · ถ้าต้องลบไฟล์ ให้ย้ายไปถังขยะ (trash/Finder) แทน rm]`;
 
-function runClaude(task, resumeId) {
+// ---------- ด่านความปลอดภัย ----------
+// 1) งานที่คำสั่งดูเสี่ยง → ไม่รันทันที ต้องให้ผู้ใช้ยืนยันก่อน (เสียง "ใช่/ยืนยัน" หรือกดปุ่มบนจอ)
+// 2) Claude ของ Friday ไม่มี MCP เลย (ตัด paybox/ms365/…) + deny คำสั่งอันตรายด้วย permission layer ของ Claude Code
+const RISKY = new RegExp([
+  'ลบ', 'ล้าง', 'ทิ้ง', 'เขียนทับ', 'แทนที่', 'ย้าย', 'เปลี่ยนชื่อ', 'แก้ไฟล์', 'แก้โค้ด', 'ฟอร์แมต',
+  'ส่งข้อความ', 'ส่งอีเมล', 'ส่งเมล', 'ส่งไลน์', 'ตอบกลับ', 'โพสต์', 'ทวีต', 'แชร์', 'อัปโหลด', 'อัพโหลด',
+  'ซื้อ', 'ขาย', 'จ่าย', 'โอน', 'เทรด', 'ออเดอร์', 'เปิดไม้', 'ปิดไม้', 'โพซิชัน', 'สั่งซื้อ', 'ถอนเงิน', 'ฝากเงิน',
+  'ติดตั้ง', 'ถอนการติดตั้ง', 'อัปเดต', 'อัพเดท', 'ดีพลอย', 'พุช', 'ปิดเครื่อง', 'รีสตาร์ท', 'รีบูต', 'ตั้งค่า', 'รหัสผ่าน',
+  'kill', 'ฆ่า', 'หยุดบอท', 'ปิดบอท',
+  '\\b(delete|remove|rm|erase|wipe|overwrite|move|rename|send|reply|email|message|post|tweet|upload|share|buy|sell|pay|transfer|trade|order|position|flatten|install|uninstall|update|upgrade|deploy|push|merge|release|publish|shutdown|restart|reboot|kill|config|settings?|password)\\b',
+].join('|'), 'i');
+
+const HARD_DENY = ['Bash(sudo:*)', 'Bash(shutdown:*)', 'Bash(reboot:*)', 'Bash(diskutil:*)', 'Bash(rm -rf /*)', 'Bash(rm -rf ~*)', 'Bash(dd:*)', 'Bash(mkfs:*)'];
+const UNCONFIRMED_DENY = ['Bash(rm:*)', 'Bash(rmdir:*)', 'Bash(git push:*)', 'Bash(git reset:*)', 'Bash(git clean:*)', 'Bash(ssh:*)', 'Bash(scp:*)', 'Bash(rsync:*)', 'Bash(osascript:*)', 'Bash(npm publish:*)', 'Bash(launchctl:*)', 'Bash(kill:*)', 'Bash(pkill:*)', 'Bash(killall:*)', 'Bash(curl -X POST:*)', 'Bash(vercel:*)'];
+
+function runClaude(task, resumeId, confirmed) {
   return new Promise((resolve) => {
-    const args = ['-p', '--dangerously-skip-permissions', '--output-format', 'json'];
+    const deny = confirmed ? HARD_DENY : [...HARD_DENY, ...UNCONFIRMED_DENY];
+    const args = ['-p', '--dangerously-skip-permissions', '--output-format', 'json',
+      '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disallowedTools', ...deny];
     if (resumeId) args.push('--resume', resumeId);
-    args.push(task + VOICE_RULES);
-    const child = spawn(CLAUDE, args, { cwd: HOME, env: { ...process.env, PATH: `${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:${process.env.PATH}` } });
+    args.push('--', task + VOICE_RULES);
+    const child = spawn(CLAUDE, args, { cwd: HOME, env: { ...process.env, ENABLE_CLAUDEAI_MCP_SERVERS: 'false', PATH: `${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:${process.env.PATH}` } });
     let out = '', err = '';
     child.stdout.on('data', (d) => { out += d; });
     child.stderr.on('data', (d) => { err += d; });
@@ -83,15 +101,26 @@ function runClaude(task, resumeId) {
   });
 }
 
-function startJob(convo, task) {
+function createJob(convo, task) {
   const id = randomUUID().slice(0, 8);
+  const job = { id, convo, task, status: 'new', result: null, confirmed: false, startedAt: Date.now() };
+  jobs.set(id, job);
+  if (RISKY.test(task)) {
+    job.status = 'needs_confirmation';
+    log(`JOB ${id} HOLD (risky) | ${task}`);
+    setTimeout(() => { if (job.status === 'needs_confirmation') { job.status = 'cancelled'; job.result = 'หมดเวลายืนยัน'; log(`JOB ${id} expired`); } }, 5 * 60e3);
+  } else startJob(job);
+  return job;
+}
+
+function startJob(job) {
+  const { id, convo, task } = job;
   const c = convos.get(convo) ?? { claudeSession: null, tail: Promise.resolve() };
   convos.set(convo, c);
-  const job = { id, convo, task, status: 'running', result: null, startedAt: Date.now() };
-  jobs.set(id, job);
-  log(`JOB ${id} start | ${task}`);
+  job.status = 'running'; job.startedAt = Date.now();
+  log(`JOB ${id} start${job.confirmed ? ' (confirmed)' : ''} | ${task}`);
   job.promise = c.tail = c.tail.then(async () => {
-    const r = await runClaude(task, c.claudeSession);
+    const r = await runClaude(task, c.claudeSession, job.confirmed);
     if (r.sessionId) c.claudeSession = r.sessionId;
     job.status = r.ok ? 'done' : 'error';
     job.result = r.text || '(ไม่มีผลลัพธ์)';
@@ -126,8 +155,19 @@ http.createServer(async (req, res) => {
       if (req.method === 'POST' && url.pathname === '/api/mac') {
         const { task, convo } = await readBody(req);
         if (!task || typeof task !== 'string') return json(res, 400, { error: 'task required' });
-        const job = startJob(String(convo || 'default'), task.slice(0, 4000));
-        await Promise.race([job.promise, new Promise((r) => setTimeout(r, QUICK_WAIT_MS))]);
+        const job = createJob(String(convo || 'default'), task.slice(0, 4000));
+        if (job.promise) await Promise.race([job.promise, new Promise((r) => setTimeout(r, QUICK_WAIT_MS))]);
+        return json(res, 200, view(job));
+      }
+      const c = url.pathname.match(/^\/api\/mac\/(\w+)\/confirm$/);
+      if (req.method === 'POST' && c) {
+        const job = jobs.get(c[1]);
+        if (!job) return json(res, 404, { error: 'no such job' });
+        if (job.status !== 'needs_confirmation') return json(res, 409, view(job));
+        const { approve } = await readBody(req);
+        if (approve === true) { job.confirmed = true; startJob(job); }
+        else { job.status = 'cancelled'; job.result = 'ผู้ใช้ยกเลิก'; log(`JOB ${job.id} cancelled`); }
+        if (job.promise) await Promise.race([job.promise, new Promise((r) => setTimeout(r, QUICK_WAIT_MS))]);
         return json(res, 200, view(job));
       }
       const m = url.pathname.match(/^\/api\/mac\/(\w+)$/);

@@ -138,10 +138,11 @@ const view = (j) => ({ id: j.id, status: j.status, result: j.result, task: j.tas
 // ---------- คำปลุก (โหมดห้อง) ----------
 // หน้าเว็บส่งเสียงช่วงที่มีคนพูด (PCM16 16kHz mono) มา → whisper-server ในเครื่องถอดความ → เช็คคำว่า Friday
 const WHISPER = process.env.WHISPER_URL || 'http://127.0.0.1:4851/inference';
-// Friday ต้องอยู่ต้นประโยค (ตัวอักษรที่ ≤ 8 หลังตัดช่องว่าง/เครื่องหมาย → ยอมให้มีคำนำหน้าสั้นๆ เช่น "เฮ้ย", "นี่")
+// Friday ต้องอยู่ต้นประโยค ยอมให้มีคำเรียก/คำทักนำหน้าได้ไม่เกิน 2 คำ (ติดกันหรือเว้นวรรคก็ได้ เช่น "เฮไฟเดย์", "เฮ้ย ไฟร์เดย์")
 // กันตื่นตอนแค่พูดถึง Friday กลางประโยค · รวมคำที่ whisper ชอบได้ยินเพี้ยน
-const WAKE_WORD = /(ฟรายเด|ไฟรเด|ไฟร์เด|ฟายเด|ไฟเด|พรายเด|ฟรายดี|ไฟรดี|ฟายดี|ฟรายได|fri\s*day|fr[ai]i?day)/i;
-const WAKE_MAX_OFFSET = 8;
+const WAKE_PREFIX = '(?:(?:เฮ้ย|เฮ้|เฮย|เฮ|hey|hi|yo|ok|okay|โอเค|นี่|หวัดดี|สวัสดี|เอ่อ|อ่า|อ้าว|ไง|โย่)[\\s,]*){0,2}';
+const WAKE_WORD = '(ฟรายเด|ไฟรเด|ไฟร์เด|ฟายเด|ไฟเด|พรายเด|ฟรายดี|ไฟรดี|ฟายดี|ฟรายได|fri\\s*day|fr[ai]i?day)';
+const WAKE = new RegExp(`^[\\s,.!?"'“”…-]*${WAKE_PREFIX}${WAKE_WORD}`, 'i');
 
 function pcmToWav(pcm) {
   const h = Buffer.alloc(44);
@@ -158,10 +159,8 @@ async function detectWake(pcm) {
   form.append('response_format', 'json');
   const r = await fetch(WHISPER, { method: 'POST', body: form });
   const text = ((await r.json()).text || '').trim();
-  const clean = text.replace(/^[\s,.!?"'“”…\-]+/, '');
-  const m = clean.match(WAKE_WORD);
-  const wake = !!m && m.index <= WAKE_MAX_OFFSET;
-  return { text, wake, phrase: wake ? clean.slice(0, m.index + m[0].length) : '' };
+  const m = text.match(WAKE);
+  return { text, wake: !!m, phrase: m ? m[0].trim() : '' };
 }
 
 // ---------- หูเบื้องหลัง: ฟังคำปลุกตอนหน้าต่าง Friday ปิดอยู่ → เปิดหน้าต่างขึ้นมาเอง ----------

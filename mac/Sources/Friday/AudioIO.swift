@@ -155,12 +155,25 @@ final class AudioIO {
         outEngine.stop()
     }
 
-    /// engine หยุดเอง (sample rate/ช่องสัญญาณของอุปกรณ์เปลี่ยน) → เลือกใหม่
+    /// ระบบแจ้ง configuration change (มักเกิดเองตอนเปิด engine อีกตัวบนอุปกรณ์เดียวกัน) → อย่ารีบสร้างใหม่
+    /// รอให้นิ่ง 1.5 วิ แล้วเช็คว่า engine หยุดจริงไหม ถ้ายังวิ่งอยู่ก็ไม่ต้องทำอะไร (กันวนสร้างใหม่ไม่จบ)
+    private var pendingHealth: DispatchWorkItem?
     private func observe(_ e: AVAudioEngine) {
         observers.append(NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: e, queue: .main) { [weak self] _ in
-            Log.write("audio: configuration changed → เลือกใหม่")
-            self?.reselect(force: true)
+            self?.scheduleHealthCheck()
         })
+    }
+
+    private func scheduleHealthCheck() {
+        pendingHealth?.cancel()
+        let w = DispatchWorkItem { [weak self] in
+            guard let self, !self.building else { return }
+            if self.inEngine.isRunning && self.outEngine.isRunning { return }
+            Log.write("audio: engine หยุด (in=\(self.inEngine.isRunning) out=\(self.outEngine.isRunning)) → เลือกใหม่")
+            self.reselect(force: true)
+        }
+        pendingHealth = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: w)
     }
 
     /// เสียบ/ถอดอุปกรณ์ → รอให้นิ่ง 1 วิ แล้วค่อยดูว่ามีตัวที่ดีกว่าไหม (กันวนตอน macOS สร้างอุปกรณ์ชั่วคราว)

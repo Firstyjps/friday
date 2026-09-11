@@ -21,6 +21,13 @@ LaunchAgent `com.kron.friday-room` เปิด Friday.app ตอน login
 - iPhone: **"หวัดดี Siri Friday"** (Shortcut แยกตามอุปกรณ์: Mac → `friday://room`, iPhone → เว็บ)
 - ถ้าปิด Friday.app ไป server ยังฟังคำปลุกสำรอง (ffmpeg) → ได้ยิน "Friday" แล้วเปิดแอปให้เอง
 
+## ความจำ / Vault / ค่าใช้จ่าย
+
+- `data/memory.md` — สิ่งที่ Friday จด (tool `remember`) · ส่งให้ Friday ทุกครั้งที่เริ่มคุย พร้อมบทสนทนาล่าสุด 3 วันจาก `~/logs/friday-chat.log`
+- `vault_lookup` — ค้นสถานะโปรเจกต์ใน `~/Vault/10-projects` ตอบทันที (ไม่ต้องรอ Claude)
+- `get_usage` / เมนู 💰 — ค่าใช้จ่ายเดือนนี้จาก token ที่ Gemini รายงาน (`data/usage.jsonl`, ราคาใน `config.json → pricing`) · โมเดลนี้ **ไม่มี free tier**
+- คำสั่งเสียง: "ปิด" = ปิดไมค์จริง (⌥⌘F เรียกกลับ) · "บาย/พอแล้ว" = จบบทสนทนา รอคำปลุกต่อ
+
 ## ด่านความปลอดภัย
 
 1. คำสั่งที่มีคำเสี่ยง (ลบ/ย้าย/ส่ง/เงิน/เทรด/ติดตั้ง/deploy/ปิดเครื่อง…) ถูกกักไว้ → ต้องพูด "ยืนยัน" (เช็คจากเสียงผู้ใช้จริง) หรือกดปุ่ม · หมดอายุ 5 นาที
@@ -30,7 +37,7 @@ LaunchAgent `com.kron.friday-room` เปิด Friday.app ตอน login
 ## คำสั่งที่ใช้บ่อย
 
 ```bash
-cd ~/Desktop/FRIDAY/mac && ./build.sh                          # build + ติดตั้งแอปใหม่
+cd ~/Desktop/FRIDAY/mac && ./build.sh                          # build → dylib ใหม่ + รีสตาร์ทแอป (ไม่ถามสิทธิ์ไมค์ซ้ำ)
 $(swift build -c release --show-bin-path)/Friday --selftest     # ทดสอบ Gemini Live โดยไม่ใช้ไมค์
 launchctl kickstart -k gui/$(id -u)/com.kron.friday            # รีสตาร์ท server
 tail -f ~/logs/friday.log                                       # WAKE (คำปลุก) / JOB / ping
@@ -39,6 +46,6 @@ tail -f ~/logs/friday-chat.log                                  # บทสน�
 
 ## หมายเหตุ
 
-- แอปเซ็นแบบ ad-hoc → build ใหม่แล้ว macOS อาจถามสิทธิ์ไมค์อีกรอบ
+- แอป = Launcher เล็กๆ (ad-hoc sign, macOS ผูกสิทธิ์ไมค์ไว้) + โค้ดจริง `~/Library/Application Support/Friday/libFridayCore.dylib` → build ใหม่แทนที่แค่ dylib ไม่ถามสิทธิ์ซ้ำ · ถ้าแก้ `Sources/Launcher`/`Info.plist`/ไอคอน จะถามอีกครั้ง
 - ปิดฝา (clamshell) ใช้ไมค์ภายนอก (หูฟัง / ลำโพงไมค์ประชุม USB) · Amphetamine ต้องไม่ติ๊ก "Allow system sleep when display is closed"
 - `.env` = `GEMINI_API_KEY`, `ALLOWED_ORIGINS` (ห้าม commit)

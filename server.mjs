@@ -1,16 +1,30 @@
 // Friday — local server: เสิร์ฟหน้าเว็บ + ออก ephemeral token ของ Gemini Live (API key ไม่ออกจาก Mac)
+// + /api/mac: รับงานจาก tool run_on_mac → รัน Claude Code บน Mac → คืนผล (+ Telegram สำรอง)
 import http from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { readFile, appendFile, mkdir } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { homedir } from 'node:os';
 import { extname, join } from 'node:path';
 
 const PORT = Number(process.env.PORT || 4850);
 const HOST = process.env.HOST || '127.0.0.1';
 const KEY = process.env.GEMINI_API_KEY;
+const HOME = homedir();
 const PUBLIC = join(import.meta.dirname, 'public');
+const LOG = join(HOME, 'logs', 'friday.log');
+const CLAUDE = process.env.CLAUDE_BIN || join(HOME, '.local/bin/claude');
+const QUICK_WAIT_MS = 12000;   // งานที่เสร็จภายในนี้ตอบใน tool call เลย ไม่งั้นแจ้งผลตามหลัง
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png' };
 
+// Origin ที่ยอมให้เรียก API (กันเว็บอื่นในเบราว์เซอร์ยิง /api/mac มาสั่ง Claude)
+const ALLOWED_ORIGINS = new Set([`http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`, ...(process.env.ALLOWED_ORIGINS || '').split(',').filter(Boolean)]);
+
+const log = (line) => mkdir(join(HOME, 'logs'), { recursive: true }).then(() => appendFile(LOG, `${new Date().toISOString()} | ${line}\n`)).catch(() => {});
+
+// ---------- Gemini token ----------
 async function createToken() {
-  if (!KEY) throw new Error('GEMINI_API_KEY ไม่ได้ตั้งใน ~/friday/.env');
+  if (!KEY) throw new Error('GEMINI_API_KEY ไม่ได้ตั้งใน ~/Desktop/FRIDAY/.env');
   const now = Date.now();
   const res = await fetch('https://generativelanguage.googleapis.com/v1beta/auth_tokens', {
     method: 'POST',
@@ -26,15 +40,107 @@ async function createToken() {
   return body.name;
 }
 
+// ---------- Telegram (บอท Hermes, ส่งออกอย่างเดียว) ----------
+let tgCfg;
+async function telegram(text) {
+  try {
+    tgCfg ??= Object.fromEntries((await readFile(join(HOME, '.hermes/.env'), 'utf8')).split('\n')
+      .map((l) => l.match(/^(TELEGRAM_BOT_TOKEN|TELEGRAM_ALLOWED_USERS)=(.*)$/)).filter(Boolean).map((m) => [m[1], m[2].trim()]));
+    const chat = tgCfg.TELEGRAM_ALLOWED_USERS?.split(',')[0];
+    if (!tgCfg.TELEGRAM_BOT_TOKEN || !chat) return;
+    await fetch(`https://api.telegram.org/bot${tgCfg.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chat, text: text.slice(0, 4000) }),
+    });
+  } catch (e) { log(`telegram error: ${e.message}`); }
+}
+
+// ---------- Claude jobs ----------
+// หนึ่ง Friday session (convo) = หนึ่ง Claude session → "ทำต่อจากเมื่อกี้" ได้; งานใน convo เดียวกันรันเรียงคิว
+const jobs = new Map();       // id → { id, convo, task, status, result, startedAt, promise }
+const convos = new Map();     // convo → { claudeSession, tail: Promise }
+
+const VOICE_RULES = `\n\n[คำสั่งนี้มาจากผู้ใช้ผ่านผู้ช่วยเสียง Friday — ทำงานให้เสร็จ แล้วจบด้วยสรุปผลภาษาไทยสั้นๆ 1-3 ประโยคแบบภาษาพูด ไม่ใช้ markdown/ตาราง/โค้ดบล็อก เพราะจะถูกอ่านออกเสียง]`;
+
+function runClaude(task, resumeId) {
+  return new Promise((resolve) => {
+    const args = ['-p', '--dangerously-skip-permissions', '--output-format', 'json'];
+    if (resumeId) args.push('--resume', resumeId);
+    args.push(task + VOICE_RULES);
+    const child = spawn(CLAUDE, args, { cwd: HOME, env: { ...process.env, PATH: `${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:${process.env.PATH}` } });
+    let out = '', err = '';
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { err += d; });
+    child.on('error', (e) => resolve({ ok: false, text: `รัน Claude ไม่ได้: ${e.message}` }));
+    child.on('close', (code) => {
+      try {
+        const j = JSON.parse(out);
+        resolve({ ok: !j.is_error, text: String(j.result ?? '').trim(), sessionId: j.session_id });
+      } catch {
+        resolve({ ok: false, text: (out || err || `claude exit ${code}`).trim().slice(0, 1500) });
+      }
+    });
+  });
+}
+
+function startJob(convo, task) {
+  const id = randomUUID().slice(0, 8);
+  const c = convos.get(convo) ?? { claudeSession: null, tail: Promise.resolve() };
+  convos.set(convo, c);
+  const job = { id, convo, task, status: 'running', result: null, startedAt: Date.now() };
+  jobs.set(id, job);
+  log(`JOB ${id} start | ${task}`);
+  job.promise = c.tail = c.tail.then(async () => {
+    const r = await runClaude(task, c.claudeSession);
+    if (r.sessionId) c.claudeSession = r.sessionId;
+    job.status = r.ok ? 'done' : 'error';
+    job.result = r.text || '(ไม่มีผลลัพธ์)';
+    const secs = Math.round((Date.now() - job.startedAt) / 1000);
+    log(`JOB ${id} ${job.status} ${secs}s | ${job.result.slice(0, 300).replace(/\n/g, ' ')}`);
+    telegram(`🎙️ Friday → Mac (${secs}s)\n${task}\n\n${job.result}`);
+  });
+  return job;
+}
+
+const view = (j) => ({ id: j.id, status: j.status, result: j.result, task: j.task });
+
+// ---------- HTTP ----------
 const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
+const readBody = (req) => new Promise((resolve, reject) => {
+  let b = ''; req.on('data', (d) => { b += d; if (b.length > 1e5) req.destroy(); });
+  req.on('end', () => { try { resolve(b ? JSON.parse(b) : {}); } catch (e) { reject(e); } }); req.on('error', reject);
+});
+function apiAllowed(req) {
+  // ต้องมี header เฉพาะ (เว็บอื่นส่งข้าม origin ไม่ได้ถ้าไม่ผ่าน preflight) + Origin ต้องอยู่ใน allowlist
+  if (req.headers['x-friday'] !== '1') return false;
+  const origin = req.headers.origin;
+  return !origin || ALLOWED_ORIGINS.has(origin);
+}
 
 http.createServer(async (req, res) => {
   try {
-    if (req.method === 'POST' && req.url === '/api/token') return json(res, 200, { token: await createToken() });
-    const path = req.url === '/' ? '/index.html' : req.url.split('?')[0];
+    const url = new URL(req.url, 'http://x');
+    if (url.pathname.startsWith('/api/')) {
+      if (!apiAllowed(req)) return json(res, 403, { error: 'forbidden' });
+      if (req.method === 'POST' && url.pathname === '/api/token') return json(res, 200, { token: await createToken() });
+      if (req.method === 'POST' && url.pathname === '/api/mac') {
+        const { task, convo } = await readBody(req);
+        if (!task || typeof task !== 'string') return json(res, 400, { error: 'task required' });
+        const job = startJob(String(convo || 'default'), task.slice(0, 4000));
+        await Promise.race([job.promise, new Promise((r) => setTimeout(r, QUICK_WAIT_MS))]);
+        return json(res, 200, view(job));
+      }
+      const m = url.pathname.match(/^\/api\/mac\/(\w+)$/);
+      if (req.method === 'GET' && m) {
+        const job = jobs.get(m[1]);
+        return job ? json(res, 200, view(job)) : json(res, 404, { error: 'no such job' });
+      }
+      return json(res, 404, { error: 'not found' });
+    }
+    const path = url.pathname === '/' ? '/index.html' : url.pathname;
     if (path.includes('..')) return json(res, 400, { error: 'bad path' });
     const data = await readFile(join(PUBLIC, path));
-    res.writeHead(200, { 'Content-Type': TYPES[extname(path)] || 'application/octet-stream' });
+    res.writeHead(200, { 'Content-Type': TYPES[extname(path)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
     res.end(data);
   } catch (e) {
     if (e.code === 'ENOENT') return json(res, 404, { error: 'not found' });

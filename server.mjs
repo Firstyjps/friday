@@ -193,8 +193,9 @@ function startEar() {
   let noise = 300, seg = [], voiced = 0, silent = 0, busy = false; const pre = [];
   let carry = Buffer.alloc(0);
 
+  let earIdle = false;          // ปล่อยไมค์เพราะแอปฟังอยู่ (ไม่ใช่ ffmpeg พัง)
   async function spawnFf() {
-    if (earOff) return;
+    if (earOff || roomAlive()) { earIdle = true; return; }
     const dev = await defaultInputIndex();
     if (!dev) { log('ear: ไม่พบไมค์'); return setTimeout(spawnFf, 30000); }
     devName = dev.name;
@@ -203,7 +204,7 @@ function startEar() {
     log(`ear: ฟังจาก "${dev.name}"`);
     ff.stdout.on('data', onPcm);
     ff.stderr.on('data', (d) => log(`ear ffmpeg: ${String(d).trim().slice(0, 200)}`));
-    ff.on('close', (code) => { ff = null; if (earOff) return; log(`ear: ffmpeg ปิด (${code}) — เริ่มใหม่ใน 5s`); setTimeout(spawnFf, 5000); });
+    ff.on('close', (code) => { ff = null; if (earOff || earIdle) return; log(`ear: ffmpeg ปิด (${code}) — เริ่มใหม่ใน 5s`); setTimeout(spawnFf, 5000); });
   }
 
   // ไมค์เปลี่ยน (เสียบ/ถอดหูฟัง/ลำโพงประชุม) → เริ่ม ffmpeg ใหม่ให้ตรงกับค่า default
@@ -248,6 +249,12 @@ function startEar() {
     } catch (e) { log(`ear error: ${e.message}`); }
     finally { busy = false; }
   }
+
+  // หูสำรองจับไมค์เฉพาะตอนไม่มีแอป/เว็บ Friday ฟังอยู่ (ไม่งั้นไอคอนไมค์ของ macOS ค้างตลอด)
+  setInterval(() => {
+    if (roomAlive() && ff) { log('ear: แอป Friday ฟังอยู่ → ปล่อยไมค์'); earIdle = true; ff.kill(); }
+    else if (!roomAlive() && !ff && !earOff && earIdle) { earIdle = false; spawnFf(); }
+  }, 5000);
 
   earControl = {
     stop() { earOff = true; ff?.kill(); log('ear: ปิด (ผู้ใช้ปิดแอป Friday)'); },

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Friday</title>
+<style>
+  :root { --bg:#0b0d10; --fg:#e8eaed; --dim:#8a9099; --accent:#ff7a1a; --ok:#3ecf8e; }
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100dvh; background:var(--bg); color:var(--fg);
+         font:16px/1.5 -apple-system, "Sukhumvit Set", system-ui, sans-serif;
+         display:flex; flex-direction:column; align-items:center; padding:env(safe-area-inset-top) 20px 24px; }
+  h1 { font-weight:600; letter-spacing:.3em; margin:32px 0 4px; font-size:14px; color:var(--dim); }
+  #orb { width:180px; height:180px; border-radius:50%; margin:40px 0 24px; border:0; cursor:pointer;
+         background:radial-gradient(circle at 35% 30%, #ffb070, var(--accent) 45%, #7a2d00);
+         box-shadow:0 0 0 0 rgba(255,122,26,.5); transition:transform .15s, filter .3s; filter:grayscale(1) brightness(.6); }
+  #orb.live { filter:none; }
+  #orb.speaking { animation:pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { box-shadow:0 0 0 24px rgba(255,122,26,0); transform:scale(1.04); } }
+  #status { color:var(--dim); min-height:1.5em; text-align:center; }
+  #log { width:100%; max-width:560px; margin-top:24px; display:flex; flex-direction:column; gap:10px; overflow-y:auto; flex:1; }
+  .me, .fri { padding:10px 14px; border-radius:14px; max-width:85%; white-space:pre-wrap; }
+  .me { align-self:flex-end; background:#1f2a37; }
+  .fri { align-self:flex-start; background:#2a1d12; }
+  .sys { align-self:center; color:var(--dim); font-size:13px; }
+</style>
+</head>
+<body>
+  <h1>FRIDAY</h1>
+  <button id="orb" aria-label="เริ่ม/หยุดคุย"></button>
+  <div id="status">แตะวงกลมเพื่อเริ่มคุย</div>
+  <div id="log"></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

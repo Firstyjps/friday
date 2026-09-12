@@ -54,7 +54,11 @@ final class FridayController: ObservableObject {
     private var peak = 0.0, frames = 0
 
     // ---------- เริ่มต้น ----------
+    private var activity: NSObjectProtocol?
+
     func start() {
+        activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical],
+                                                         reason: "Friday ฟังคำปลุก")   // กัน App Nap (timer/ping ไม่หยุด) แต่เครื่องยังหลับได้
         Task {
             Log.write("start: ขอสิทธิ์ไมค์ (สถานะเดิม \(AVCaptureDevice.authorizationStatus(for: .audio).rawValue))")
             startTimers()                               // ping ตั้งแต่ต้น → เห็นสถานะใน ~/logs/friday.log แม้ค้างกลางทาง
@@ -82,6 +86,7 @@ final class FridayController: ObservableObject {
                 self.inputName = self.audio.inputName; self.outputName = self.audio.outputName; self.onPhaseChanged?(self.phase)
             } }
             audio.onFailure = { [weak self] in Task { @MainActor in await self?.openAudio() } }
+            audio.onHardwareChange = { [weak self] in Task { @MainActor in self?.retryNow = true } }
             await openAudio()
             usageLine = await ServerAPI.usageLine() ?? ""
             let woke = await ServerAPI.hello()          // ถูกเปิดเพราะหูเบื้องหลังของ server ได้ยิน "Friday"?
@@ -92,22 +97,29 @@ final class FridayController: ObservableObject {
     /// เปิดระบบเสียง วนลองทุก 5 วิจนสำเร็จ (ตอนเปิดเครื่อง ลำโพง/จอนอก/ไมค์ อาจยังไม่พร้อม)
     private var openingAudio = false
     private func openAudio() async {
-        guard !openingAudio else { return }
+        guard !openingAudio else { retryNow = true; return }
         openingAudio = true; defer { openingAudio = false }
-        var attempt = 0
+        var attempt = 0, lastErr = ""
         while true {
             do { try audio.start(); break } catch {
                 attempt += 1
-                Log.write("audio: เปิดไม่สำเร็จ ครั้งที่ \(attempt): \(error)")
-                phase = .starting
-                if attempt == 12 { setPhase(.error("เปิดระบบเสียงไม่ได้ (ลองมา 1 นาทีแล้ว ยังลองต่อ): \(error.localizedDescription)")); onWantsPanel?(true) }
-                try? await Task.sleep(for: .seconds(5))
+                let msg = error.localizedDescription
+                if msg != lastErr || attempt % 20 == 0 { Log.write("audio: เปิดไม่สำเร็จ (ครั้งที่ \(attempt)): \(msg)"); lastErr = msg }
+                // ไม่มีไมค์เลย (เช่น ปิดฝาแล้วไม่ได้ต่อไมค์นอก) → แจ้งสถานะ แล้วรอเสียบอุปกรณ์ ไม่วนถี่ๆ ให้เปลืองแบต
+                if (error as NSError).code == 1 || attempt >= 6 {
+                    if case .error = phase {} else { setPhase(.error("ไม่มีไมค์ที่ใช้ได้ — เสียบหูฟัง/ไมค์ หรือเปิดฝาเครื่อง แล้ว Friday จะกลับมาเอง")) }
+                } else { phase = .starting }
+                // รอ: 5 วิ ช่วงแรก (เปิดเครื่องใหม่ อุปกรณ์กำลังพร้อม) แล้ว 60 วิ · เสียบ/ถอดอุปกรณ์ → ลองใหม่ทันที
+                retryNow = false
+                let wait = attempt < 6 ? 5 : 60
+                for _ in 0..<wait where !retryNow { try? await Task.sleep(for: .seconds(1)) }
             }
         }
         inputName = audio.inputName; outputName = audio.outputName
         Log.write("start: พร้อม 🎤 \(inputName) · 🔊 \(outputName) (aec=\(audio.aecEnabled))")
         if live == nil { setPhase(.sleeping) }
     }
+    private var retryNow = false
 
     private func startTimers() {
         // บอก server ว่าแอปฟังอยู่ (หูเบื้องหลังจะได้ไม่ปลุกซ้อน) + debug ระดับเสียง

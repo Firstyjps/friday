@@ -14,6 +14,8 @@ final class AudioIO {
     var onFailure: (() -> Void)?
     /// ใช้อุปกรณ์ชุดใหม่แล้ว (ไว้อัปเดตเมนู)
     var onDevicesChanged: (() -> Void)?
+    /// มีการเสียบ/ถอดอุปกรณ์ (ใช้ปลุก controller ที่กำลังรอไมค์ให้ลองใหม่ทันที)
+    var onHardwareChange: (() -> Void)?
 
     /// ลำดับอุปกรณ์ที่อยากใช้ (ชื่อบางส่วน) — มาจาก config.json
     var outputPriority: [String] = []
@@ -194,6 +196,7 @@ final class AudioIO {
 
     /// เสียบ/ถอดอุปกรณ์ → รอให้นิ่ง 1 วิ แล้วค่อยดูว่ามีตัวที่ดีกว่าไหม (กันวนตอน macOS สร้างอุปกรณ์ชั่วคราว)
     private func scheduleReselect() {
+        onHardwareChange?()
         guard !building else { return }
         pendingReselect?.cancel()
         let w = DispatchWorkItem { [weak self] in self?.reselect(force: false) }
@@ -246,8 +249,8 @@ final class AudioIO {
         DispatchQueue.main.async { [weak self] in
             guard let self, !self.building else { return }
             let name = self.inputName
-            Log.write("audio: ไมค์ \(name) เงียบสนิท → พักไว้ 2 นาที เปลี่ยนตัวถัดไป")
-            self.benchedInputs[name] = Date().addingTimeInterval(120)
+            Log.write("audio: ไมค์ \(name) เงียบสนิท → พักไว้ 10 นาที เปลี่ยนตัวถัดไป")
+            self.benchedInputs[name] = Date().addingTimeInterval(600)
             self.reselect(force: true)
         }
     }

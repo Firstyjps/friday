@@ -10,7 +10,8 @@ const NEGATE = new RegExp(CFG.negate, 'i');
 const confirms = new Map();                  // job_id → { task, card, heard }
 
 const $ = (id) => document.getElementById(id);
-const orb = $('orb'), statusEl = $('status'), logEl = $('log');
+const orb = $('orb'), orbWrap = $('orbWrap'), statusEl = $('status'), logEl = $('log'), metaEl = $('meta'), muteBtn = $('muteBtn'), endBtn = $('endBtn');
+let micMuted = false;
 const CONVO = crypto.randomUUID();          // หนึ่งหน้า = หนึ่ง Claude session
 const NEEDS_TAP = 'needs-tap';
 const api = (path, body) => fetch(path, {
@@ -67,16 +68,17 @@ function playPcm(b64) {
   const src = outCtx.createBufferSource(); src.buffer = buf; src.connect(outCtx.destination);
   playHead = Math.max(playHead, outCtx.currentTime + 0.03);
   src.start(playHead); playHead += buf.duration;
-  playing.add(src); orb.classList.add('speaking');
-  src.onended = () => { playing.delete(src); if (!playing.size) orb.classList.remove('speaking'); };
+  playing.add(src); orbWrap.classList.add('speaking'); setLevel(0.9);
+  src.onended = () => { playing.delete(src); if (!playing.size) { orbWrap.classList.remove('speaking'); setLevel(0); } };
 }
-function stopPlayback() { for (const s of playing) try { s.stop(); } catch {} playing.clear(); playHead = 0; orb.classList.remove('speaking'); }
+function stopPlayback() { for (const s of playing) try { s.stop(); } catch {} playing.clear(); playHead = 0; orbWrap.classList.remove('speaking'); setLevel(0); }
+const setLevel = (l) => document.documentElement.style.setProperty('--lvl', Math.max(0, Math.min(1, l)).toFixed(2));
 
 // ---------- tool: run_on_mac ----------
 // แปลงสถานะงานจาก server → การ์ดบนจอ + ข้อความตอบ Gemini
 function jobToResponse(job, card) {
   if (job.status === 'running') {
-    card.textContent = `⏳ Mac กำลังทำ: ${job.task}`;
+    card.className = 'job'; card.replaceChildren(Object.assign(document.createElement('span'), { className: 'spin' }), `Mac กำลังทำ · ${job.task}`);
     pollJob(job.id, card);
     return { status: 'running', note: 'งานยังไม่เสร็จ ผลจะส่งตามมาภายหลัง' };
   }
@@ -84,13 +86,13 @@ function jobToResponse(job, card) {
     showConfirm(job, card);
     return { status: 'needs_confirmation', job_id: job.id, task: job.task, reason: job.reason || '', note: 'ทวนงานและเหตุผลให้ผู้ใช้ฟังสั้นๆ แล้วถามว่ายืนยันไหม รอผู้ใช้ตอบก่อนเรียก confirm_task' };
   }
-  card.replaceChildren(`${{ done: '✅', cancelled: '🚫' }[job.status] ?? '⚠️'} ${job.task}`);
+  card.className = 'sys'; card.replaceChildren(`${{ done: 'เสร็จแล้ว', cancelled: 'ยกเลิก' }[job.status] ?? 'ผิดพลาด'} · ${job.task}`);
   return { status: job.status, result: job.result };
 }
 
 async function runOnMac(fc, force) {          // force: ไม่ได้ยินผู้ใช้สั่ง → server กักไว้ถามก่อน
   const task = fc.args?.task || '';
-  const card = bubble('sys', `🖥️ สั่ง Mac: ${task}${force ? ' (ไม่ได้ยินผู้ใช้สั่ง → ต้องยืนยัน)' : ''}`);
+  const card = bubble('sys', `สั่ง Mac · ${task}${force ? ' (ไม่ได้ยินผู้ใช้สั่ง → ต้องยืนยัน)' : ''}`);
   let resp;
   try { resp = jobToResponse(await api('/api/mac', { task, convo: CONVO, confirm: force }), card); }
   catch (e) { card.textContent = `⚠️ ส่งงานไม่ได้: ${e.message}`; resp = { status: 'error', result: e.message }; }
@@ -98,15 +100,19 @@ async function runOnMac(fc, force) {          // force: ไม่ได้ยิ
 }
 
 function showConfirm(job, card) {
-  card.className = 'sys confirm';
-  card.replaceChildren(`⚠️ ต้องยืนยัน: ${job.task}${job.reason ? ` — ${job.reason}` : ''}`);
-  const row = document.createElement('div'); row.className = 'btns';
-  const yes = document.createElement('button'); yes.textContent = '✅ ยืนยัน';
-  const no = document.createElement('button'); no.textContent = '❌ ยกเลิก';
-  yes.onclick = () => decide(job.id, true, 'ปุ่ม');
-  no.onclick = () => decide(job.id, false, 'ปุ่ม');
-  row.append(yes, no); card.append(row);
-  confirms.set(job.id, { task: job.task, card, heard: '', armed: false, at: Date.now() });   // armed = Friday ถามแล้ว
+  card.className = 'confirm';
+  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+  const kind = /^รันคำสั่ง/.test(job.reason || '') ? 'รันคำสั่ง' : /^(เขียน|แก้)ไฟล์/.test(job.reason || '') ? (job.reason.startsWith('แก้') ? 'แก้ไฟล์' : 'เขียนไฟล์') : 'งานเสี่ยง';
+  const title = el('div', 'title', `ต้องยืนยัน · ${kind}`); const left = el('span', 'left', '5:00'); title.append(left);
+  const cmd = el('div', 'cmd', (job.reason || job.task).replace(/^(รันคำสั่ง|เขียนไฟล์|แก้ไฟล์):?\s*/, ''));
+  const row = el('div', 'btns');
+  const yes = el('button', null, 'ยืนยัน'); const no = el('button', null, 'ยกเลิก');
+  yes.onclick = () => decide(job.id, true, 'ปุ่ม'); no.onclick = () => decide(job.id, false, 'ปุ่ม');
+  row.append(yes, no);
+  card.replaceChildren(title, kind === 'งานเสี่ยง' ? el('div', null, job.task) : cmd, row, el('div', 'hint', 'หรือพูดว่า "ยืนยัน" / "ยกเลิก"'));
+  const at = Date.now();
+  const tick = setInterval(() => { const s = Math.max(0, 300 - Math.round((Date.now() - at) / 1000)); left.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; if (!s || !confirms.has(job.id)) clearInterval(tick); }, 1000);
+  confirms.set(job.id, { task: job.task, card, heard: '', armed: false, at });   // armed = Friday ถามแล้ว
 }
 
 // ยืนยัน/ยกเลิกจริงที่ server — เรียกจากปุ่มบนจอหรือจาก confirm_task (หลังผ่านการเช็คเสียง)
@@ -114,7 +120,7 @@ async function decide(id, approve, via) {
   const c = confirms.get(id); if (!c) return null;
   confirms.delete(id);
   c.card.className = 'sys';
-  c.card.replaceChildren(`${approve ? '▶️ ยืนยันแล้ว' : '🚫 ยกเลิก'} (${via}): ${c.task}`);
+  c.card.replaceChildren(`${approve ? 'ยืนยันแล้ว' : 'ยกเลิก'} (${via}) · ${c.task}`);
   const job = await api(`/api/mac/${id}/confirm`, { approve });
   if (via === 'ปุ่ม') {                        // Gemini ไม่รู้ว่ากดปุ่ม → แจ้งให้รู้
     if (job.status === 'running') pollJob(job.id, c.card);
@@ -151,7 +157,7 @@ async function pollUntilDone(id, card) {
     let job;
     try { job = await api(`/api/mac/${id}`); }
     catch (e) {
-      if (e.message === 'no such job') { card.replaceChildren('⚠️ งานหาย (server รีสตาร์ท)'); pendingResults.push(macResult('งานหายไปเพราะ server รีสตาร์ท ต้องสั่งใหม่')); flushResults(); return; }
+      if (e.message === 'no such job') { card.className = 'sys'; card.replaceChildren('งานหาย (server รีสตาร์ท)'); pendingResults.push(macResult('งานหายไปเพราะ server รีสตาร์ท ต้องสั่งใหม่')); flushResults(); return; }
       continue;
     }
     if (job.status === 'running') continue;
@@ -160,15 +166,15 @@ async function pollUntilDone(id, card) {
       pendingResults.push(macResult(`งาน "${job.task}" ต้องยืนยันก่อนทำต่อ (job_id ${job.id}): ${job.reason || ''} — ทวนให้ผู้ใช้ฟังแล้วถามว่ายืนยันไหม`));
       flushResults(); return;
     }
-    card.replaceChildren(`${job.status === 'done' ? '✅' : '⚠️'} ${job.task}`);
+    card.className = 'sys'; card.replaceChildren(`${job.status === 'done' ? 'เสร็จแล้ว' : 'ผิดพลาด'} · ${job.task}`);
     pendingResults.push(macResult(`งาน "${job.task}" ${job.status === 'done' ? 'เสร็จแล้ว' : 'ผิดพลาด'}: ${job.result}`));
     flushResults();
     return;
   }
-  card.replaceChildren(`⚠️ หมดเวลารอผล`);
+  card.className = 'sys'; card.replaceChildren('หมดเวลารอผล');
 }
 function expireConfirms() {
-  for (const [id, c] of confirms) if (Date.now() - c.at > 5 * 60e3) { confirms.delete(id); c.card.className = 'sys'; c.card.replaceChildren(`⌛ หมดเวลายืนยัน: ${c.task}`); }
+  for (const [id, c] of confirms) if (Date.now() - c.at > 5 * 60e3) { confirms.delete(id); c.card.className = 'sys'; c.card.replaceChildren(`หมดเวลายืนยัน · ${c.task}`); }
 }
 
 // ส่งผลงานนานให้ Friday ตอนที่ไม่ได้พูดทับผู้ใช้/ตัวเอง
@@ -253,7 +259,7 @@ function closeAudio() {
 // ไมค์ทุก ~100ms: มี session → ส่ง Gemini · กำลังต่อ → เก็บคิว · โหมดห้องไม่มี session → ตรวจคำปลุก
 let connecting = false; const connectQueue = [];
 function onMicChunk(buf) {
-  if (session && !connecting) return sendAudio(buf);
+  if (session && !connecting) { if (micMuted) return; if (!playing.size) setLevel(rms(buf) / 2500); return sendAudio(buf); }
   if (connecting) return connectQueue.push(buf);
   if (ROOM) wakeListen(buf);
 }
@@ -291,7 +297,7 @@ async function openSession(prebuffer = [], { resume = null } = {}) {
         sessionResumption: resume ? { handle: resume } : {},
       },
       callbacks: {
-        onopen: () => { setStatus('ฟังอยู่… พูดได้เลย'); orb.classList.add('live'); },
+        onopen: () => { setStatus('ฟังอยู่… พูดได้เลย'); orbWrap.classList.add('live'); muteBtn.disabled = endBtn.disabled = false; },
         onmessage: (m) => { lastActivity = Date.now(); countUsage(m); onMessage(m); },
         onerror: (e) => { bubble('sys', 'error: ' + (e.message || e)); },
         onclose: (e) => { if (session) { bubble('sys', 'ปิดการเชื่อมต่อ' + (e.reason ? ': ' + e.reason : '')); endSession(); } },
@@ -313,7 +319,7 @@ function endSession() {
   if (session && usage) api('/api/usage', { ...usage, seconds: Math.round((Date.now() - sessionStart) / 1000), app: 'web' }).catch(() => {});
   usage = null;
   const s = session; session = null; try { s?.close(); } catch {}
-  stopPlayback(); orb.classList.remove('live'); meBubble = friBubble = null;
+  stopPlayback(); orbWrap.classList.remove('live'); meBubble = friBubble = null; muteBtn.disabled = endBtn.disabled = true; micMuted = false; muteBtn.classList.remove('on'); metaEl.textContent = '';
   setStatus(ROOM ? '💤 รอคำปลุก "Friday"' : 'แตะวงกลมเพื่อเริ่มคุย');
 }
 
@@ -410,3 +416,13 @@ if (ROOM) {
   // ปิดหน้าต่าง → บอก server ให้หูเบื้องหลังฟังแทนทันที
   addEventListener('pagehide', () => fetch('/api/bye', { method: 'POST', keepalive: true, headers: { 'X-Friday': '1' } }).catch(() => {}));
 } else if (new URLSearchParams(location.search).has('auto')) orb.click();
+
+// ---------- แถบล่าง + เวลาที่คุย ----------
+muteBtn.onclick = () => { micMuted = !micMuted; muteBtn.classList.toggle('on', micMuted); setStatus(micMuted ? 'ปิดไมค์ชั่วคราว' : 'ฟังอยู่… พูดได้เลย'); };
+endBtn.onclick = () => { if (session) { endSession(); if (!ROOM) closeAudio(); } };
+setInterval(() => {
+  if (!session) return;
+  const s = Math.round((Date.now() - sessionStart) / 1000);
+  const cost = usage ? ((usage.inText * (CFG.pricing?.inText ?? 0.75) + usage.inAudio * (CFG.pricing?.inAudio ?? 3) + usage.outText * (CFG.pricing?.outText ?? 4.5) + usage.outAudio * (CFG.pricing?.outAudio ?? 12)) / 1e6 * 33) : 0;
+  metaEl.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')} · ≈ ฿${cost.toFixed(2)}`;
+}, 1000);

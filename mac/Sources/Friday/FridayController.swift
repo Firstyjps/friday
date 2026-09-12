@@ -36,8 +36,17 @@ final class FridayController: ObservableObject {
     private var friTurn = ""                      // คำตอบล่าสุดของ Friday (บางทีโมเดลพิมพ์ชื่อ tool ออกมาแทนการเรียก)
     private var ending = false
     private var pendingMute = false
-    private var sessionStart: Date?
+    private var sessionStart: Date? { didSet { sessionStartPublic = sessionStart } }
+    @Published var sessionStartPublic: Date?
     @Published var usageLine = ""
+    // ---- ค่าสำหรับ overlay (ทิศทาง B) ----
+    struct PendingConfirm: Equatable { let jobId: String; let task: String; let reason: String; let at: Date }
+    @Published var micLevel = 0.0                 // RMS ไมค์ล่าสุด (ตอน live)
+    @Published var outLevel = 0.0                 // RMS เสียง Friday ล่าสุด
+    @Published var lastFri = ""                   // ประโยคล่าสุดของ Friday (สะสมใน turn)
+    @Published var activeJobs = 0 { didSet { if activeJobs > 0, oldValue == 0 { jobStartedAt = Date() } } }
+    @Published var jobStartedAt: Date?
+    @Published var pendingConfirm: PendingConfirm?
     private let convo = UUID().uuidString          // หนึ่งรอบเปิดแอป = หนึ่ง Claude session (จำงานก่อนหน้าได้)
 
     private var connectQueue: [Data] = []
@@ -49,7 +58,6 @@ final class FridayController: ObservableObject {
     private var userSpoke = false                 // ผู้ใช้พูดหลังจากข้อความที่เราส่งให้ Gemini ครั้งล่าสุด (กันผลงาน/เว็บ/Vault สั่งงานแทนผู้ใช้)
     private var friSpoke = false
     private var pendingResults: [String] = []
-    private var activeJobs = 0
 
     // คำปลุก: VAD อยู่ใน WakeDetector (struct ล้วน) — ที่นี่แค่ส่ง clip ไป whisper
     private var wakeDetector = WakeDetector()
@@ -79,7 +87,7 @@ final class FridayController: ObservableObject {
             audio.onMic = { [weak self] chunk in Task { @MainActor in self?.onMic(chunk) } }
             audio.onSpeakingChanged = { [weak self] s in Task { @MainActor in
                 self?.speaking = s; self?.lastActivity = Date()
-                if !s { self?.speakEndedAt = Date() }
+                if !s { self?.speakEndedAt = Date(); self?.outLevel = 0 }
             } }
             audio.outputPriority = config!.outputPriority ?? []
             audio.inputPriority = config!.inputPriority ?? []
@@ -159,7 +167,8 @@ final class FridayController: ObservableObject {
         case .live:
             // ไม่มีตัวตัดเสียงสะท้อน (เช่น เสียงออกลำโพงจอ + ไมค์หูฟัง) → ไมค์จะได้ยิน Friday แล้ววนลูปคุยกับตัวเอง
             // จึงไม่ส่งเสียงไมค์ระหว่าง Friday พูด + ช่วงหางเสียง 0.8 วิ (แลกกับการพูดแทรกไม่ได้ในโหมดนี้)
-            if !audio.aecEnabled && (speaking || Date().timeIntervalSince(speakEndedAt) < 0.8) { return }
+            if !audio.aecEnabled && (speaking || Date().timeIntervalSince(speakEndedAt) < 0.8) { micLevel = 0; return }
+            micLevel = WakeDetector.rms(chunk)
             live?.sendAudio(chunk)
         case .connecting: connectQueue.append(chunk)
         case .sleeping: if !earMuted { wakeListen(chunk) }
@@ -280,6 +289,7 @@ final class FridayController: ObservableObject {
         }
         sessionStart = nil
         ending = false; userTurn = ""
+        lastFri = ""; micLevel = 0; outLevel = 0; confirms = [:]; pendingConfirm = nil
         live?.close(); live = nil
         audio.flush()
         meIndex = nil; friIndex = nil; connectQueue = []
@@ -301,6 +311,7 @@ final class FridayController: ObservableObject {
             if pendingGreeting, let g = config?.greeting { live?.sendText(g) }
             pendingGreeting = false
         case .audio(let d):
+            outLevel = WakeDetector.rms(d)
             audio.play(pcm16: d)
         case .interrupted:
             audio.flush()
@@ -315,6 +326,7 @@ final class FridayController: ObservableObject {
             }
         case .outputText(let t):
             friTurn += t; friSpoke = true
+            lastFri = friIndex == nil ? t : lastFri + t
             if let i = friIndex { messages[i].text += t } else { messages.append(.init(kind: .fri, text: t)); friIndex = messages.count - 1 }
             meIndex = nil
         case .turnComplete:
@@ -393,6 +405,11 @@ final class FridayController: ObservableObject {
     private func holdForConfirm(_ job: ServerAPI.Job, at idx: UUID) {
         update(idx, text: "⚠️ ต้องยืนยัน: \(job.task)\(job.reason.map { " — \($0)" } ?? "")", kind: .confirm, jobId: job.id)
         confirms[job.id] = Confirm(task: job.task)
+        pendingConfirm = PendingConfirm(jobId: job.id, task: job.task, reason: job.reason ?? "", at: Date())
+    }
+    private func syncConfirm() {
+        if let cur = pendingConfirm, confirms[cur.jobId] != nil { return }
+        pendingConfirm = confirms.min { $0.value.at < $1.value.at }.map { PendingConfirm(jobId: $0.key, task: $0.value.task, reason: "", at: $0.value.at) }
     }
 
     /// การ์ดยืนยันหมดอายุพร้อมกับ server (5 นาที) — ไม่งั้น confirms ค้าง → idle ไม่ทำงาน
@@ -401,6 +418,7 @@ final class FridayController: ObservableObject {
             confirms.removeValue(forKey: k)
             if let idx = messages.first(where: { $0.jobId == k })?.id { update(idx, text: "⌛ หมดเวลายืนยัน: \(c.task)", kind: .sys) }
         }
+        syncConfirm()
     }
 
     /// ผลงานที่ส่งกลับให้ Gemini ต้องถูกมองเป็นข้อมูล ไม่ใช่คำสั่ง (อาจมีข้อความจากเว็บที่ Claude ไปอ่าน)
@@ -471,6 +489,7 @@ final class FridayController: ObservableObject {
     @discardableResult
     func decide(_ jobId: String, approve: Bool, via: String) async -> [String: Any] {
         guard let c = confirms.removeValue(forKey: jobId) else { return ["status": "error", "result": "ไม่พบงาน"] }
+        syncConfirm()
         let idx = messages.first { $0.jobId == jobId }?.id ?? sys("")
         update(idx, text: "\(approve ? "▶️ ยืนยันแล้ว" : "🚫 ยกเลิก") (\(via)): \(c.task)", kind: .sys)
         do {

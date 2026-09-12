@@ -7,7 +7,8 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let controller = FridayController()
     private var statusItem: NSStatusItem!
-    private var panel: NSPanel!
+    private var panel: NSPanel!          // หน้าต่าง history (เปิดจากเมนู)
+    private var overlay: NSPanel!        // Island overlay กลางขอบบนจอ (โผล่เฉพาะตอนคุย)
     private var hotKey: HotKey?
 
     func applicationDidFinishLaunching(_ n: Notification) {
@@ -28,8 +29,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.contentView = NSHostingView(rootView: PanelView(c: controller))
         placePanel()
 
+        overlay = NSPanel(contentRect: NSRect(x: 0, y: 0, width: OverlayView.width, height: OverlayView.height),
+                          styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        overlay.isOpaque = false
+        overlay.backgroundColor = .clear
+        overlay.hasShadow = false                       // เงาวาดใน SwiftUI ตามขนาดจริงของการ์ด
+        overlay.isFloatingPanel = true
+        overlay.level = .floating
+        overlay.hidesOnDeactivate = false
+        overlay.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        overlay.contentView = NSHostingView(rootView: OverlayView(c: controller))
+
         controller.onPhaseChanged = { [weak self] p in self?.updateIcon(p); self?.buildMenu() }
-        controller.onWantsPanel = { [weak self] show in self?.showPanel(show) }
+        controller.onWantsPanel = { [weak self] show in self?.showOverlay(show) }
         controller.start()
 
         // friday://  (Shortcut "Friday" บน Mac / หูเบื้องหลังของ server) → เรียกคุย
@@ -48,7 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func summon() {
         if controller.earMuted { controller.setEarMuted(false) }   // เรียกเอง = เปิดหูคืน
-        showPanel(true)
+        showOverlay(true)
         if controller.phase == .sleeping { controller.wake(prebuffer: [], greet: true) }
     }
 
@@ -59,6 +71,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showPanel(_ show: Bool) {
         if show { panel.orderFrontRegardless() } else { panel.orderOut(nil) }
+    }
+
+    /// overlay: กลางขอบบนของจอหลัก ใต้ menu bar
+    private func showOverlay(_ show: Bool) {
+        if show {
+            if let screen = NSScreen.main?.visibleFrame {
+                overlay.setFrameOrigin(NSPoint(x: screen.midX - OverlayView.width / 2, y: screen.maxY - OverlayView.height - 6))
+            }
+            overlay.orderFrontRegardless()
+        } else { overlay.orderOut(nil) }
     }
 
     private func updateIcon(_ p: FridayController.Phase) {
@@ -76,7 +98,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let m = NSMenu()
         let talking = controller.phase == .live || controller.phase == .connecting
         m.addItem(withTitle: talking ? "หยุดคุย" : "คุยกับ Friday  (⌥⌘F)", action: #selector(toggleTalk), keyEquivalent: "").target = self
-        m.addItem(withTitle: "แสดงหน้าต่าง", action: #selector(showWindow), keyEquivalent: "").target = self
+        m.addItem(withTitle: "ประวัติการคุย", action: #selector(showWindow), keyEquivalent: "").target = self
         m.addItem(.separator())
         for line in ["🔊 \(controller.outputName.isEmpty ? "-" : controller.outputName)", "🎤 \(controller.inputName.isEmpty ? "-" : controller.inputName)", "💰 \(controller.usageLine.isEmpty ? "-" : controller.usageLine)"] {
             let it = NSMenuItem(title: line, action: nil, keyEquivalent: ""); it.isEnabled = false; m.addItem(it)
@@ -89,7 +111,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = m
     }
 
-    @objc private func toggleTalk() { showPanel(true); controller.toggle() }
+    @objc private func toggleTalk() { showOverlay(true); controller.toggle() }
     @objc private func showWindow() { showPanel(true) }
     @objc private func toggleEar() { controller.toggleEar() }
     @objc private func openLog() { NSWorkspace.shared.open(URL(fileURLWithPath: NSHomeDirectory() + "/logs/friday.log")) }

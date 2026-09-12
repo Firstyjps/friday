@@ -32,6 +32,7 @@ final class FridayController: ObservableObject {
     private var affirm: NSRegularExpression?
     private var negate: NSRegularExpression?
     private var farewell: NSRegularExpression?
+    private var stopWords: NSRegularExpression?
     private var userTurn = ""                     // ประโยคล่าสุดของผู้ใช้ (ไว้จับคำลา)
     private var friTurn = ""                      // คำตอบล่าสุดของ Friday (บางทีโมเดลพิมพ์ชื่อ tool ออกมาแทนการเรียก)
     private var ending = false
@@ -85,6 +86,7 @@ final class FridayController: ObservableObject {
             affirm = try? NSRegularExpression(pattern: config!.affirm, options: .caseInsensitive)
             negate = try? NSRegularExpression(pattern: config!.negate, options: .caseInsensitive)
             farewell = config!.farewell.flatMap { try? NSRegularExpression(pattern: $0, options: .caseInsensitive) }
+            stopWords = config!.stopWords.flatMap { try? NSRegularExpression(pattern: $0, options: .caseInsensitive) }
             audio.onMic = { [weak self] chunk in Task { @MainActor in self?.onMic(chunk) } }
             audio.onSpeakingChanged = { [weak self] s in Task { @MainActor in
                 self?.speaking = s; self?.lastActivity = Date()
@@ -316,6 +318,7 @@ final class FridayController: ObservableObject {
             outLevel = WakeDetector.rms(d)
             audio.play(pcm16: d)
         case .interrupted:
+            Log.write("ev: interrupted (fri=\(friTurn.count) chars)")
             audio.flush()
         case .inputText(let t):
             let newTurn = meIndex == nil
@@ -327,12 +330,14 @@ final class FridayController: ObservableObject {
                 confirms[k]!.heard = (newTurn ? "" : confirms[k]!.heard) + t
             }
         case .outputText(let t):
-            if muteAfterEnd { return }
+            if muteAfterEnd { Log.write("ev: drop text after end: \(t.prefix(30))"); return }
+            if friIndex == nil { Log.write("ev: fri-start (prev fri=\(friTurn.count) chars)") }
             friTurn += t; friSpoke = true
             lastFri = friIndex == nil ? t : lastFri + t
             if let i = friIndex { messages[i].text += t } else { messages.append(.init(kind: .fri, text: t)); friIndex = messages.count - 1 }
             meIndex = nil
         case .turnComplete:
+            Log.write("ev: turnComplete user=\(userTurn.count) fri=\(friTurn.count)")
             // บันทึกบทสนทนาที่คุยกับ Friday จริง (หลังปลุกแล้วเท่านั้น — เสียงที่ได้ยินทั่วไปไม่ถูกบันทึก)
             if !userTurn.isEmpty { Log.chat("🧑 \(userTurn)") }
             if !friTurn.isEmpty { Log.chat("🤖 \(friTurn)") }
@@ -340,11 +345,12 @@ final class FridayController: ObservableObject {
             if friSpoke { for k in confirms.keys { confirms[k]!.armed = true } }   // Friday พูด (ถาม) แล้ว → เริ่มฟังคำตอบยืนยัน
             friSpoke = false
             // ตัวสำรอง: ผู้ใช้พูดคำลาแต่ Gemini ไม่เรียก end_conversation → ปิดเองหลัง Friday พูดจบ
-            if !ending, friTurn.contains("stop_listening") { endAfterSpeech(mute: true) }
+            if !ending, friTurn.contains("stop_listening") || (confirms.isEmpty && activeJobs == 0 && matches(stopWords, userTurn)) { endAfterSpeech(mute: true) }
             else if !ending, confirms.isEmpty, activeJobs == 0, matches(farewell, userTurn) || friTurn.contains("end_conversation") { endAfterSpeech(mute: false) }
             userTurn = ""; friTurn = ""
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in self?.flushResults() }
         case .toolCall(let id, let name, let args):
+            Log.write("ev: tool \(name) (fri=\(friTurn.count) chars)")
             // เครื่องมือที่ "ลงมือ" ต้องมาจากเสียงผู้ใช้จริง ไม่ใช่จากข้อความที่เราส่งให้ Gemini (ผลงาน/เว็บ/Vault) — กัน prompt injection
             let acts = (config?.actionTools ?? ["run_on_mac", "remember", "run_shortcut", "open_app", "open_url"]).contains(name)
             if name == "run_on_mac" { runOnMac(id: id, name: name, task: args["task"] as? String ?? "", force: !userSpoke) }

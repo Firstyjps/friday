@@ -24,6 +24,7 @@ enum ServerAPI {
         var outputPriority: [String]? = nil
         var inputPriority: [String]? = nil
         var farewell: String? = nil
+        var stopWords: String? = nil
         var speechConfig: JSONValue? = nil
         var serverTools: [String]? = nil
         var maxSessionSec: Double? = nil

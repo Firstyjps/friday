@@ -7,6 +7,8 @@ const CFG = await fetch('config.json', { cache: 'no-cache' }).then((r) => r.json
 const { model: MODEL, system: SYSTEM, tools: TOOLS } = CFG;
 const AFFIRM = new RegExp(CFG.affirm, 'i');
 const NEGATE = new RegExp(CFG.negate, 'i');
+const STOPWORDS = CFG.stopWords ? new RegExp(CFG.stopWords, 'i') : null;
+let userTurnText = '';
 const confirms = new Map();                  // job_id → { task, card, heard }
 
 const $ = (id) => document.getElementById(id);
@@ -212,11 +214,13 @@ function onMessage(msg) {
   if (sc?.inputTranscription?.text) {
     const newTurn = !meBubble;
     meBubble ??= bubble('me'); meBubble.textContent += sc.inputTranscription.text; friBubble = null;
-    userSpoke = true;
+    userSpoke = true; userTurnText = (newTurn ? '' : userTurnText) + sc.inputTranscription.text;
     for (const c of confirms.values()) if (c.armed) c.heard = (newTurn ? '' : c.heard) + sc.inputTranscription.text;   // เฉพาะ turn ล่าสุดหลัง Friday ถาม
   }
   if (sc?.outputTranscription?.text && !muteAfterEnd) { friBubble ??= bubble('fri'); friBubble.textContent += sc.outputTranscription.text; meBubble = null; friSpoke = true; }
   if (sc?.turnComplete) {
+    if (STOPWORDS && session && !confirms.size && !activeJobs && STOPWORDS.test(userTurnText)) { userTurnText = ''; endAfterSpeech(); }   // ผู้ใช้สั่งปิด → จบเอง ไม่รอ Gemini เรียก tool
+    userTurnText = '';
     if (friSpoke) for (const c of confirms.values()) c.armed = true;   // Friday พูด (ถาม) แล้ว → เริ่มฟังคำตอบยืนยัน
     friSpoke = false; meBubble = null; friBubble = null; setTimeout(flushResults, 800);
   }

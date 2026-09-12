@@ -15,8 +15,8 @@ enum SelfTest {
                 s.onEvent = { e in
                     switch e {
                     case .open: print("setupComplete ✅"); s.sendText(ProcessInfo.processInfo.environment["FRIDAY_TEST_PROMPT"] ?? "ช่วยนับหน่อยว่าบนเดสก์ท็อปมีกี่โฟลเดอร์ ตอบแค่เรียก tool")
-                    case .audio(let d): audioBytes += d.count
-                    case .outputText(let t): text += t
+                    case .audio(let d): audioBytes += d.count; if ProcessInfo.processInfo.environment["FRIDAY_TRACE"] != nil { print("[audio \(d.count)]") }
+                    case .outputText(let t): text += t; if ProcessInfo.processInfo.environment["FRIDAY_TRACE"] != nil { print("[text] \(t)") }
                     case .toolCall(let id, let name, let args):
                         tool = "\(name) \(args)"; print("toolCall ✅ \(tool)")
                         if cfg.serverTools?.contains(name) == true {
@@ -24,6 +24,7 @@ enum SelfTest {
                         } else {
                             s.sendToolResponse(id: id, name: name, response: ["status": "done", "result": "มี 33 โฟลเดอร์ (selftest)"])
                         }
+                    case .turnComplete where ProcessInfo.processInfo.environment["FRIDAY_TRACE"] != nil && tool.isEmpty: print("[turnComplete]")
                     case .turnComplete where !tool.isEmpty:
                         print("audio bytes=\(audioBytes) text=\(text)"); print("usage=\(s.usage)"); print("usageMetadata raw:\n  " + s.usageLog.joined(separator: "\n  ")); print("resumeHandle=\(s.resumeHandle != nil)"); s.close(); exit(0)
                     case .closed(let why): print("closed: \(why)"); exit(tool.isEmpty ? 1 : 0)

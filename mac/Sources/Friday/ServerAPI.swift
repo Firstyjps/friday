@@ -74,8 +74,9 @@ enum ServerAPI {
         try JSONDecoder().decode(Job.self, from: try await request("/api/mac", method: "POST", json: ["task": task, "convo": convo, "confirm": forceConfirm], timeout: 60))
     }
 
-    static func confirm(id: String, approve: Bool) async throws -> Job {
-        try JSONDecoder().decode(Job.self, from: try await request("/api/mac/\(id)/confirm", method: "POST", json: ["approve": approve], timeout: 60))
+    /// remember: "ยืนยันตลอด" → server จำประเภทคำสั่ง/โฟลเดอร์นี้ ไม่ถามอีก
+    static func confirm(id: String, approve: Bool, remember: Bool = false) async throws -> Job {
+        try JSONDecoder().decode(Job.self, from: try await request("/api/mac/\(id)/confirm", method: "POST", json: ["approve": approve, "remember": remember], timeout: 60))
     }
 
     static func job(_ id: String) async throws -> Job {

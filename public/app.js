@@ -111,20 +111,22 @@ function showConfirm(job, card) {
   const yes = el('button', null, 'ยืนยัน'); const no = el('button', null, 'ยกเลิก');
   yes.onclick = () => decide(job.id, true, 'ปุ่ม'); no.onclick = () => decide(job.id, false, 'ปุ่ม');
   row.append(yes, no);
-  card.replaceChildren(title, kind === 'งานเสี่ยง' ? el('div', null, job.task) : cmd, row, el('div', 'hint', 'หรือพูดว่า "ยืนยัน" / "ยกเลิก"'));
+  const always = el('button', 'always', 'ยืนยันตลอด · ไม่ถามอีก'); always.onclick = () => decide(job.id, true, 'ปุ่ม·ตลอด', true);
+  const hint = el('div', 'hint', 'หรือพูดว่า "ยืนยัน" / "ยกเลิก"'); hint.append(always);
+  card.replaceChildren(title, kind === 'งานเสี่ยง' ? el('div', null, job.task) : cmd, row, hint);
   const at = Date.now();
   const tick = setInterval(() => { const s = Math.max(0, 300 - Math.round((Date.now() - at) / 1000)); left.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; if (!s || !confirms.has(job.id)) clearInterval(tick); }, 1000);
   confirms.set(job.id, { task: job.task, card, heard: '', armed: false, at });   // armed = Friday ถามแล้ว
 }
 
 // ยืนยัน/ยกเลิกจริงที่ server — เรียกจากปุ่มบนจอหรือจาก confirm_task (หลังผ่านการเช็คเสียง)
-async function decide(id, approve, via) {
+async function decide(id, approve, via, remember = false) {
   const c = confirms.get(id); if (!c) return null;
   confirms.delete(id);
   c.card.className = 'sys';
   c.card.replaceChildren(`${approve ? 'ยืนยันแล้ว' : 'ยกเลิก'} (${via}) · ${c.task}`);
-  const job = await api(`/api/mac/${id}/confirm`, { approve });
-  if (via === 'ปุ่ม') {                        // Gemini ไม่รู้ว่ากดปุ่ม → แจ้งให้รู้
+  const job = await api(`/api/mac/${id}/confirm`, { approve, remember });
+  if (via.startsWith('ปุ่ม')) {                // Gemini ไม่รู้ว่ากดปุ่ม → แจ้งให้รู้
     if (job.status === 'running') pollJob(job.id, c.card);
     else { pendingResults.push(macResult(`งาน "${job.task}" ${approve ? `ผู้ใช้กดยืนยันแล้ว ผล: ${job.result}` : 'ผู้ใช้กดยกเลิกแล้ว'}`)); flushResults(); }
   }
@@ -140,7 +142,8 @@ async function confirmTask(fc) {
     resp = { status: 'not_confirmed', result: c.armed ? 'ยังไม่ได้ยินผู้ใช้พูดยืนยันสั้นๆ ชัดเจน (เช่น ใช่ / ยืนยัน) ให้ถามผู้ใช้อีกครั้ง' : 'ยังไม่ได้ถามผู้ใช้ ให้ทวนงานแล้วถามว่ายืนยันไหมก่อน' };
   } else {
     try {
-      const job = await decide(id, !!approve, 'เสียง');
+      const remember = !!approve && /ตลอด|จำไว้|ไม่ต้องถาม|ทุกครั้ง/.test(c.heard);   // "ยืนยันตลอด"
+      const job = await decide(id, !!approve, remember ? 'เสียง·ตลอด' : 'เสียง', remember);
       resp = approve ? jobToResponse(job, c.card) : { status: 'cancelled', result: 'ยกเลิกงานแล้ว' };
     } catch (e) { resp = { status: 'error', result: e.message }; }
   }

@@ -8,6 +8,7 @@ import { homedir } from 'node:os';
 import { extname, join } from 'node:path';
 import { RISKY, READ_ONLY_TOOLS, HARD_DENY, CONFIRM_MARK, WAKE, frameResult } from './lib/rules.mjs';
 import { AgentSession } from './lib/claude-agent.mjs';
+import { decide as policyDecide, ruleKey, RuleStore } from './lib/policy.mjs';
 
 const PORT = Number(process.env.PORT || 4850);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -122,6 +123,7 @@ function runClaude(task, resumeId, confirmed) {
 // ---------- Agent SDK: process ค้างต่อ convo, ด่านยืนยันระดับ tool call ----------
 const AGENT_RULES = SYSTEM_RULES + `\nเครื่องมือที่ต้องขออนุญาต (เขียน/แก้/ลบไฟล์ รันคำสั่ง) ระบบจะถามผู้ใช้ให้เอง ให้รอผล · ถ้าถูกปฏิเสธ ให้หยุดทันที สรุปสิ่งที่ทำได้/ไม่ได้ ไม่ต้องหาทางอ้อม`;
 const AGENT_IDLE_MS = 30 * 60e3, AGENT_TURN_MS = 10 * 60e3;
+const ruleStore = await new RuleStore(join(import.meta.dirname, 'data', 'permissions.json')).load();   // "ยืนยันตลอด" ที่จำไว้
 const describeTool = (tool, input) => {
   if (tool === 'Bash') return `รันคำสั่ง: ${input.command}`;
   if (tool === 'Write') return `เขียนไฟล์ ${input.file_path}`;
@@ -133,10 +135,14 @@ function agentFor(convo, c) {
   c.agent = new AgentSession({
     cwd: HOME, claudePath: CLAUDE, systemAppend: AGENT_RULES, log,
     // Claude ขอใช้เครื่องมือที่ไม่อยู่ใน allowlist → กัก job ไว้ถามผู้ใช้ (เสียง/ปุ่ม) แล้วค่อยตอบ allow/deny
-    onPermission: (tool, input, signal) => {
+    onPermission: async (tool, input, signal) => {
       const job = c.currentJob;
-      if (!job) return Promise.resolve(false);
-      if (job.confirmed) return Promise.resolve(true);        // ยืนยันงานนี้ไปแล้ว → ทำต่อได้
+      if (!job) return false;
+      if (job.confirmed) return true;                          // ยืนยันงานนี้ไปแล้ว → ทำต่อได้
+      const cfg = JSON.parse(await readText(join(PUBLIC, 'config.json')) || '{}');
+      const d = policyDecide(tool, input, { trust: cfg.trust ?? 'relaxed', rules: ruleStore.rules, protectedPaths: cfg.protectedPaths });
+      if (d.allow) { log(`JOB ${job.id} auto-allow ${describeTool(tool, input).slice(0, 120)} (${d.why})`); return true; }
+      job.pendingTool = { tool, input };
       hold(job, describeTool(tool, input), 'tool');
       return new Promise((resolve) => {
         job.permResolve = (ok) => { job.permResolve = null; clearTimeout(t); resolve(ok); };
@@ -516,9 +522,13 @@ http.createServer(async (req, res) => {
         const job = jobs.get(c[1]);
         if (!job) return json(res, 404, { error: 'no such job' });
         if (job.status !== 'needs_confirmation') return json(res, 409, view(job));
-        const { approve } = await readBody(req);
+        const { approve, remember } = await readBody(req);
         if (job.permResolve) {                       // งานรันอยู่ใน agent รอ allow/deny เครื่องมือ
           job.status = 'running';
+          if (approve === true && remember === true && job.pendingTool) {   // "ยืนยันตลอด" → จำประเภทคำสั่ง/โฟลเดอร์นี้ ไม่ถามอีก
+            const k = ruleKey(job.pendingTool.tool, job.pendingTool.input);
+            if (k && await ruleStore.add(k)) log(`PERMISSION remember ${k}`);
+          }
           if (approve === true) { job.confirmed = true; log(`JOB ${job.id} tool allowed`); job.permResolve(true); }
           else { log(`JOB ${job.id} tool denied`); job.permResolve(false); }
         }

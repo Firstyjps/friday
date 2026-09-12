@@ -226,5 +226,21 @@
   "_actionToolsNote": "เครื่องมือที่ลงมือทำ — แอป/เว็บจะยอมเรียกก็ต่อเมื่อผู้ใช้พูดหลังข้อความล่าสุดที่เราส่งให้ Gemini (กัน prompt injection)",
   "_googleSearchNote": "ลอง {\"googleSearch\": {}} ใน tools แล้ว (12 ก.ย. 2026) → Gemini ปิด session ทันที 'You exceeded your current quota' — คีย์นี้ไม่มี quota grounding บน Live · ถ้าเปิด billing grounding แล้วค่อยใส่กลับ",
   "stopWords": "(ปิดไมค์|ปิดไป|ปิดก่อน|ปิดๆ|หยุดฟัง|ไม่ต้องฟัง|เลิกฟัง|\\bปิด\\b|\\b(stop listening|mute)\\b)",
-  "_stopWordsNote": "แอป/เว็บจบเองแบบปิดไมค์เมื่อผู้ใช้พูดคำเหล่านี้ (ไม่รอ Gemini เรียก stop_listening ซึ่งมักลืม)"
+  "_stopWordsNote": "แอป/เว็บจบเองแบบปิดไมค์เมื่อผู้ใช้พูดคำเหล่านี้ (ไม่รอ Gemini เรียก stop_listening ซึ่งมักลืม)",
+  "trust": "full",
+  "_trustNote": "สิทธิ์ของ Claude ใน Friday: ask = ถามทุกเครื่องมือที่ไม่ใช่อ่าน · relaxed = ปล่อยงานอ่าน/ดึงข้อมูล/เขียนไฟล์โฟลเดอร์ปกติ ถามที่ย้อนกลับไม่ได้ · full = ผ่านหมด ยกเว้น sudo/ssh/scp/ดิสก์/ปิดเครื่อง และไฟล์ใน protectedPaths (แก้ที่นี่ ไม่ต้อง build)",
+  "protectedPaths": [
+    "~/.ssh",
+    "~/.aws",
+    "~/.gnupg",
+    "~/.claude",
+    "~/.hermes",
+    "~/Desktop/FRIDAY/.env",
+    "/etc",
+    "/System",
+    "/Library",
+    "*funding-executor*",
+    "*katana*",
+    "*executor*"
+  ]
 }

@@ -97,7 +97,13 @@ struct OverlayView: View {
                         Text("ยกเลิก").font(.system(size: 13)).foregroundStyle(.white).frame(maxWidth: .infinity).frame(height: 34)
                     }.buttonStyle(.plain).background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
-                Text("หรือพูดว่า \"ยืนยัน\" / \"ยกเลิก\"").font(.system(size: 11)).foregroundStyle(dim)
+                HStack {
+                    Text("หรือพูดว่า \"ยืนยัน\" / \"ยกเลิก\"").font(.system(size: 11)).foregroundStyle(dim)
+                    Spacer()
+                    Button { Task { await c.decide(p.jobId, approve: true, via: "ปุ่ม·ตลอด", remember: true) } } label: {
+                        Text("ยืนยันตลอด · ไม่ถามอีก").font(.system(size: 11, weight: .medium)).foregroundStyle(warn)
+                    }.buttonStyle(.plain)
+                }
             }
         }
     }

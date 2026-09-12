@@ -54,7 +54,8 @@
   .confirm .title { display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600; color:var(--warn); }
   .confirm .title .left { margin-left:auto; font-weight:400; color:var(--dim); font-variant-numeric:tabular-nums; }
   .confirm .cmd { font:12px/1.5 ui-monospace, "SF Mono", Menlo, monospace; background:rgba(0,0,0,.35); padding:10px; border-radius:10px; word-break:break-all; }
-  .confirm .hint { font-size:12px; color:var(--dim); }
+  .confirm .hint { font-size:12px; color:var(--dim); display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  .confirm .hint .always { font:inherit; font-size:12px; font-weight:500; color:var(--warn); background:none; border:0; padding:6px 0; cursor:pointer; }
   .btns { display:flex; gap:10px; }
   .btns button { flex:1; height:48px; font:inherit; font-size:15px; border-radius:12px; border:0; cursor:pointer; background:rgba(255,255,255,.08); color:var(--fg); }
   .btns button:first-child { background:var(--accent); color:#1a0d00; font-weight:600; }

@@ -483,10 +483,11 @@ final class FridayController: ObservableObject {
                 // ต้องเป็นประโยคสั้นๆ ของผู้ใช้ "หลังจาก" Friday ถาม และมีคำยืนยันโดยไม่มีคำปฏิเสธ
                 let heard = c.heard.trimmingCharacters(in: .whitespaces)
                 let ok = c.armed && heard.count <= 40 && matches(affirm, heard) && !matches(negate, heard)
+                let remember = ok && heard.range(of: "ตลอด|จำไว้|ไม่ต้องถาม|ทุกครั้ง", options: .regularExpression) != nil   // "ยืนยันตลอด"
                 if approve && !ok {
                     resp = ["status": "not_confirmed", "result": c.armed ? "ยังไม่ได้ยินผู้ใช้พูดยืนยันสั้นๆ ชัดเจน (เช่น ใช่ / ยืนยัน) ให้ถามผู้ใช้อีกครั้ง" : "ยังไม่ได้ถามผู้ใช้ ให้ทวนงานแล้วถามว่ายืนยันไหมก่อน"]
                 } else {
-                    resp = await decide(jobId, approve: approve, via: "เสียง")
+                    resp = await decide(jobId, approve: approve, via: remember ? "เสียง·ตลอด" : "เสียง", remember: remember)
                 }
             } else {
                 resp = ["status": "error", "result": "ไม่พบงานที่รอยืนยัน (อาจยืนยัน/ยกเลิกไปแล้ว หรือหมดเวลา)"]
@@ -497,14 +498,14 @@ final class FridayController: ObservableObject {
 
     /// ยืนยัน/ยกเลิกจริงที่ server — จากปุ่มบนหน้าต่าง หรือจาก confirm_task (ผ่านเช็คเสียงแล้ว)
     @discardableResult
-    func decide(_ jobId: String, approve: Bool, via: String) async -> [String: Any] {
+    func decide(_ jobId: String, approve: Bool, via: String, remember: Bool = false) async -> [String: Any] {
         guard let c = confirms.removeValue(forKey: jobId) else { return ["status": "error", "result": "ไม่พบงาน"] }
         syncConfirm()
         let idx = messages.first { $0.jobId == jobId }?.id ?? sys("")
         update(idx, text: "\(approve ? "▶️ ยืนยันแล้ว" : "🚫 ยกเลิก") (\(via)): \(c.task)", kind: .sys)
         do {
-            let job = try await ServerAPI.confirm(id: jobId, approve: approve)
-            if via == "ปุ่ม" {                          // Gemini ไม่รู้ว่ากดปุ่ม → แจ้งให้รู้
+            let job = try await ServerAPI.confirm(id: jobId, approve: approve, remember: remember)
+            if via.hasPrefix("ปุ่ม") {                  // Gemini ไม่รู้ว่ากดปุ่ม → แจ้งให้รู้
                 if job.status == "running" { poll(job.id, task: job.task, at: idx) }
                 else { pendingResults.append(macResult("งาน \"\(job.task)\" \(approve ? "ผู้ใช้กดยืนยันแล้ว ผล: \(job.result ?? "")" : "ผู้ใช้กดยกเลิกแล้ว")")); flushResults() }
                 return [:]

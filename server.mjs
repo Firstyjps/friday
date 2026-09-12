@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { extname, join } from 'node:path';
 import { RISKY, READ_ONLY_TOOLS, HARD_DENY, CONFIRM_MARK, WAKE, frameResult } from './lib/rules.mjs';
+import { AgentSession } from './lib/claude-agent.mjs';
 
 const PORT = Number(process.env.PORT || 4850);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -71,7 +72,8 @@ async function telegram(text) {
 // ---------- Claude jobs ----------
 // หนึ่ง Friday session (convo) = หนึ่ง Claude session → "ทำต่อจากเมื่อกี้" ได้; งานใน convo เดียวกันรันเรียงคิว
 const jobs = new Map();       // id → { id, convo, task, status, result, startedAt, promise }
-const convos = new Map();     // convo → { claudeSession, tail: Promise }
+const convos = new Map();     // convo → { claudeSession, tail: Promise, agent: AgentSession, currentJob }
+const USE_AGENT = process.env.FRIDAY_AGENT !== 'cli';   // default: Agent SDK (process ค้าง + ด่านยืนยันระดับ tool) · FRIDAY_AGENT=cli = claude -p แบบเดิม
 
 // กติกาที่ต่อท้าย system prompt ของ Claude (ไม่ใช่ท้าย task — system แรงกว่า และไม่ซ้ำใน transcript ทุกงาน)
 const SYSTEM_RULES = `คำสั่งมาจากผู้ใช้ผ่านผู้ช่วยเสียง Friday (ถอดจากเสียง อาจฟังผิดได้) — ทำงานให้เสร็จ แล้วจบด้วยสรุปผลภาษาไทยสั้นๆ 1-3 ประโยคแบบภาษาพูด ไม่ใช้ markdown/ตาราง/โค้ดบล็อก เพราะจะถูกอ่านออกเสียง
@@ -117,6 +119,48 @@ function runClaude(task, resumeId, confirmed) {
   });
 }
 
+// ---------- Agent SDK: process ค้างต่อ convo, ด่านยืนยันระดับ tool call ----------
+const AGENT_RULES = SYSTEM_RULES + `\nเครื่องมือที่ต้องขออนุญาต (เขียน/แก้/ลบไฟล์ รันคำสั่ง) ระบบจะถามผู้ใช้ให้เอง ให้รอผล · ถ้าถูกปฏิเสธ ให้หยุดทันที สรุปสิ่งที่ทำได้/ไม่ได้ ไม่ต้องหาทางอ้อม`;
+const AGENT_IDLE_MS = 30 * 60e3, AGENT_TURN_MS = 10 * 60e3;
+const describeTool = (tool, input) => {
+  if (tool === 'Bash') return `รันคำสั่ง: ${input.command}`;
+  if (tool === 'Write') return `เขียนไฟล์ ${input.file_path}`;
+  if (tool === 'Edit' || tool === 'MultiEdit' || tool === 'NotebookEdit') return `แก้ไฟล์ ${input.file_path}`;
+  return `${tool} ${JSON.stringify(input).slice(0, 150)}`;
+};
+function agentFor(convo, c) {
+  if (c.agent && !c.agent.closed) return c.agent;
+  c.agent = new AgentSession({
+    cwd: HOME, claudePath: CLAUDE, systemAppend: AGENT_RULES, log,
+    // Claude ขอใช้เครื่องมือที่ไม่อยู่ใน allowlist → กัก job ไว้ถามผู้ใช้ (เสียง/ปุ่ม) แล้วค่อยตอบ allow/deny
+    onPermission: (tool, input, signal) => {
+      const job = c.currentJob;
+      if (!job) return Promise.resolve(false);
+      if (job.confirmed) return Promise.resolve(true);        // ยืนยันงานนี้ไปแล้ว → ทำต่อได้
+      hold(job, describeTool(tool, input), 'tool');
+      return new Promise((resolve) => {
+        job.permResolve = (ok) => { job.permResolve = null; clearTimeout(t); resolve(ok); };
+        const t = setTimeout(() => { if (job.permResolve) { log(`JOB ${job.id} permission timeout`); job.status = 'running'; job.permResolve(false); } }, 5 * 60e3);
+        signal.addEventListener('abort', () => job.permResolve?.(false), { once: true });
+      });
+    },
+  }).start();
+  log(`agent: เริ่ม session ใหม่ (${convo})`);
+  return c.agent;
+}
+async function runAgent(c, job, prompt) {
+  const agent = agentFor(job.convo, c);
+  c.currentJob = job;
+  const kill = setTimeout(() => { log(`JOB ${job.id} เกิน ${AGENT_TURN_MS / 60000} นาที → interrupt`); agent.interrupt(); }, AGENT_TURN_MS);
+  try {
+    const r = await agent.ask(prompt);
+    if (r.dead) { log('agent: session ตาย → ใช้ claude -p แทนงานนี้'); c.agent = null; return runClaude(prompt, c.claudeSession, job.confirmed); }
+    return { ok: r.ok, text: r.text, sessionId: agent.sessionId, needsConfirm: false, denied: r.denied };
+  } finally { clearTimeout(kill); c.currentJob = null; job.permResolve = null; }
+}
+// ปิด agent ที่ว่างนานเกิน AGENT_IDLE_MS (ประหยัด RAM, transcript ไม่โตไม่รู้จบ)
+setInterval(() => { for (const [convo, c] of convos) if (c.agent && !c.agent.closed && !c.agent.busy && Date.now() - c.agent.lastUsedAt > AGENT_IDLE_MS) { c.agent.close(); c.agent = null; log(`agent: ปิด session ว่าง (${convo})`); } }, 60e3);
+
 function createJob(convo, task, { forceConfirm = false } = {}) {
   const dup = [...jobs.values()].find((j) => j.convo === convo && j.task === task && Date.now() - j.startedAt < 30000 && j.status !== 'cancelled');
   if (dup) { log(`JOB ${dup.id} dedupe (สั่งซ้ำ) | ${task}`); return dup; }
@@ -132,7 +176,8 @@ function createJob(convo, task, { forceConfirm = false } = {}) {
 // กักงานรอยืนยัน (หมดอายุ 5 นาที)
 function hold(job, reason, why) {
   job.status = 'needs_confirmation'; job.reason = reason;
-  log(`JOB ${job.id} HOLD (${why}) | ${job.task}${why === 'claude' ? ` | ${reason.slice(0, 200).replace(/\n/g, ' ')}` : ''}`);
+  log(`JOB ${job.id} HOLD (${why}) | ${job.task}${why !== 'risky' ? ` | ${reason.slice(0, 200).replace(/\n/g, ' ')}` : ''}`);
+  if (why === 'tool') return;    // งานกำลังรันอยู่ใน agent — หมดเวลาแล้ว permission timeout จะ deny ให้เอง
   setTimeout(() => { if (job.status === 'needs_confirmation') { job.status = 'cancelled'; job.result = 'หมดเวลายืนยัน'; log(`JOB ${job.id} expired`); } }, 5 * 60e3);
 }
 
@@ -144,7 +189,7 @@ function startJob(job) {
   log(`JOB ${id} start${job.confirmed ? ' (confirmed)' : ''} | ${task}`);
   const prompt = job.confirmed && job.reason ? `${task}\n\n[ผู้ใช้ยืนยันแล้ว ทำได้เลย]` : task;
   job.promise = c.tail = c.tail.then(async () => {
-    const r = await runClaude(prompt, c.claudeSession, job.confirmed);
+    const r = USE_AGENT ? await runAgent(c, job, prompt) : await runClaude(prompt, c.claudeSession, job.confirmed);
     if (r.sessionId) c.claudeSession = r.sessionId;
     const secs = Math.round((Date.now() - job.startedAt) / 1000);
     if (r.needsConfirm) {            // Claude บอกเองว่างานต้องเขียน/ลบ หรือถูกปฏิเสธสิทธิ์ → ถามผู้ใช้ แล้วค่อยทำต่อด้วย session เดิม
@@ -160,6 +205,11 @@ function startJob(job) {
 }
 
 const view = (j) => ({ id: j.id, status: j.status, result: j.result, reason: j.reason, task: j.task });
+// รอผลไม่เกิน QUICK_WAIT_MS แต่ตอบทันทีเมื่อสถานะเปลี่ยน (เช่น กักรอยืนยันตั้งแต่วินาทีที่ 3 ไม่ต้องรอครบ 12)
+async function settle(job) {
+  const t0 = Date.now();
+  while (job.status === 'running' && Date.now() - t0 < QUICK_WAIT_MS) await new Promise((r) => setTimeout(r, 150));
+}
 
 // ---------- คำปลุก (โหมดห้อง) ----------
 // หน้าเว็บส่งเสียงช่วงที่มีคนพูด (PCM16 16kHz mono) มา → whisper-server ในเครื่องถอดความ → เช็คคำว่า Friday
@@ -458,7 +508,7 @@ http.createServer(async (req, res) => {
         const { task, convo, confirm } = await readBody(req);    // confirm=true: แอปไม่ได้ยินผู้ใช้สั่ง → กักไว้ถามก่อน
         if (!task || typeof task !== 'string') return json(res, 400, { error: 'task required' });
         const job = createJob(String(convo || 'default'), task.slice(0, 4000), { forceConfirm: confirm === true });
-        if (job.promise) await Promise.race([job.promise, new Promise((r) => setTimeout(r, QUICK_WAIT_MS))]);
+        await settle(job);
         return json(res, 200, view(job));
       }
       const c = url.pathname.match(/^\/api\/mac\/(\w+)\/confirm$/);
@@ -467,9 +517,14 @@ http.createServer(async (req, res) => {
         if (!job) return json(res, 404, { error: 'no such job' });
         if (job.status !== 'needs_confirmation') return json(res, 409, view(job));
         const { approve } = await readBody(req);
-        if (approve === true) { job.confirmed = true; startJob(job); }
+        if (job.permResolve) {                       // งานรันอยู่ใน agent รอ allow/deny เครื่องมือ
+          job.status = 'running';
+          if (approve === true) { job.confirmed = true; log(`JOB ${job.id} tool allowed`); job.permResolve(true); }
+          else { log(`JOB ${job.id} tool denied`); job.permResolve(false); }
+        }
+        else if (approve === true) { job.confirmed = true; startJob(job); }
         else { job.status = 'cancelled'; job.result = 'ผู้ใช้ยกเลิก'; log(`JOB ${job.id} cancelled`); }
-        if (job.promise) await Promise.race([job.promise, new Promise((r) => setTimeout(r, QUICK_WAIT_MS))]);
+        await settle(job);
         return json(res, 200, view(job));
       }
       const m = url.pathname.match(/^\/api\/mac\/(\w+)$/);

@@ -1,6 +1,6 @@
 # Friday — Handoff สำหรับ Review / Optimize
 
-> เขียนเมื่อ 12 ก.ย. 2026 · git `0124f32` (36 commits) · โค้ด ~2,500 บรรทัด
+> เขียนเมื่อ 12 ก.ย. 2026 · git `0124f32` (36 commits) · โค้ด ~2,500 บรรทัด · **อัปเดต: เฟส 0–3 ตาม `REVIEW-2026-09-12.md` แก้แล้ว — ส่วนที่บรรยาย RISKY/deny lists/`claude -p` ด้านล่างเป็นสถาปัตยกรรมเดิม ดู README ส่วนความปลอดภัยสำหรับของปัจจุบัน**
 > อ่านคู่กับ [README.md](README.md) (วิธีใช้) และ Vault `10-projects/friday-status.md` (ประวัติทุกเฟส)
 
 ## 1. Friday คืออะไร
@@ -30,7 +30,9 @@ iPhone Safari ──Tailscale serve (HTTPS, tailnet-only)──> public/ (เว
 
 | ไฟล์ | หน้าที่ |
 |---|---|
-| `server.mjs` | server ทั้งหมด (token, jobs/Claude, ด่านความปลอดภัย RISKY/deny lists, wake regex, หูสำรอง, context/memory/vault/usage) |
+| `server.mjs` | server ทั้งหมด (token pre-mint, jobs/Claude ผ่าน `lib/claude-agent.mjs`, ด่านยืนยันระดับ tool, หูสำรอง, context/memory/vault/usage, fast lane) |
+| `lib/rules.mjs`, `lib/claude-agent.mjs`, `test/` | กฎ (RISKY/WAKE/allowlist) · Agent SDK session + canUseTool · `npm test` |
+| `.../WakeDetector.swift` | VAD struct ล้วน (แยกจาก controller) |
 | `public/config.json` | prompt + tools + ค่าตั้งทั้งหมด |
 | `public/app.js`, `index.html` | เว็บ (iPhone / `?room=1` สำรอง) |
 | `mac/Sources/Launcher/main.swift` | ตัวเปิดแอป 13 บรรทัด — `dlopen` dylib แล้วเรียก `friday_main` (**อย่าแก้ถ้าไม่จำเป็น** ดู §6) |

@@ -51,10 +51,9 @@ final class FridayController: ObservableObject {
     private var pendingResults: [String] = []
     private var activeJobs = 0
 
-    // VAD (คำปลุก)
-    private var noiseFloor = 300.0, voiced = 0, silent = 0, checking = false
-    private var seg: [Data] = [], preroll: [Data] = []
-    private var peak = 0.0, frames = 0
+    // คำปลุก: VAD อยู่ใน WakeDetector (struct ล้วน) — ที่นี่แค่ส่ง clip ไป whisper
+    private var wakeDetector = WakeDetector()
+    private var checking = false
 
     // ---------- เริ่มต้น ----------
     private var activity: NSObjectProtocol?
@@ -129,10 +128,10 @@ final class FridayController: ObservableObject {
         Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
+                let st = self.wakeDetector.takeStats()
                 await ServerAPI.ping(["app": "mac", "phase": "\(self.phase)", "track": "live", "ctx": "running",
-                                      "input": self.audio.inputName, "frames": self.frames, "peak": Int(self.peak),
-                                      "noise": Int(self.noiseFloor), "muted": self.earMuted])
-                self.frames = 0; self.peak = 0
+                                      "input": self.audio.inputName, "frames": st.frames, "peak": Int(st.peak),
+                                      "noise": Int(self.wakeDetector.noiseFloor), "muted": self.earMuted])
             }
         }
         // เงียบ/ไม่มีงานค้าง นานเกิน idleMs → กลับไปรอคำปลุก
@@ -168,31 +167,8 @@ final class FridayController: ObservableObject {
         }
     }
 
-    private func rms(_ d: Data) -> Double {
-        d.withUnsafeBytes { raw in
-            let s = raw.bindMemory(to: Int16.self)
-            var acc = 0.0
-            for v in s { acc += Double(v) * Double(v) }
-            return (acc / Double(max(1, s.count))).squareRoot()
-        }
-    }
-
     private func wakeListen(_ chunk: Data) {
-        let level = rms(chunk); frames += 1; peak = max(peak, level)
-        let isSpeech = level > max(noiseFloor * 3, 400)
-        if !isSpeech && seg.isEmpty {
-            noiseFloor = noiseFloor * 0.95 + level * 0.05
-            preroll.append(chunk); if preroll.count > 3 { preroll.removeFirst() }
-            return
-        }
-        if seg.isEmpty { seg = preroll; preroll = [] }
-        seg.append(chunk)
-        if isSpeech { voiced += 1; silent = 0 } else { silent += 1 }
-        if silent >= 6 || seg.count >= 40 {
-            let clip = seg, enough = voiced >= 3
-            seg = []; voiced = 0; silent = 0
-            if enough && !checking { checkWake(clip) }
-        }
+        if let clip = wakeDetector.feed(chunk), !checking { checkWake(clip) }
     }
 
     private func checkWake(_ clip: [Data]) {
@@ -536,7 +512,7 @@ final class FridayController: ObservableObject {
     /// ปิดหู = ปล่อยไมค์จริง (ไม่ใช่แค่ไม่สนใจเสียง) · เปิดหู = เปิดไมค์กลับ
     func setEarMuted(_ mute: Bool) {
         guard mute != earMuted else { return }
-        earMuted = mute; seg = []; voiced = 0; silent = 0
+        earMuted = mute; wakeDetector.reset()
         if mute {
             if phase == .live || phase == .connecting { endSession() }
             audio.pauseInput()

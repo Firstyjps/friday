@@ -286,7 +286,8 @@ async function context() {
   const recent = (await readText(CHAT)).trim().split('\n')
     .filter((l) => Date.parse(l.slice(0, 20)) > since).slice(-30)
     .map((l) => l.replace(/^(\S+)T(\d\d:\d\d)\S* \| /, '$1 $2 ')).join('\n');
-  return { memory, recent };
+  const shortcuts = (JSON.parse(await readText(join(PUBLIC, 'config.json')) || '{}').shortcutsAllowed ?? []).join(', ');
+  return { memory, recent, shortcuts };
 }
 
 async function vaultLookup(query) {
@@ -326,6 +327,22 @@ const serverTools = {
   },
   vault_lookup: async ({ query }) => vaultLookup(query || ''),
   get_usage: async () => usageSummary(),
+  // Apple Shortcuts (คุมบ้านผ่าน HomePod mini / Apple Home) — เฉพาะชื่อใน config.shortcutsAllowed
+  run_shortcut: async ({ name }) => {
+    const allowed = JSON.parse(await readText(join(PUBLIC, 'config.json')) || '{}').shortcutsAllowed ?? [];
+    const n = String(name || '').trim();
+    if (!allowed.includes(n)) { log(`SHORTCUT ปฏิเสธ | ${n}`); return { ok: false, result: `"${n}" ไม่อยู่ในรายการที่อนุญาต`, allowed }; }
+    log(`SHORTCUT | ${n}`);
+    const r = await new Promise((resolve) => {
+      const p = spawn('/usr/bin/shortcuts', ['run', n]); let err = '';
+      const t = setTimeout(() => { p.kill(); resolve({ ok: false, result: 'หมดเวลา 30 วิ' }); }, 30000);
+      p.stderr.on('data', (d) => { err += d; });
+      p.on('close', (code) => { clearTimeout(t); resolve(code === 0 ? { ok: true, result: `สั่ง "${n}" แล้ว` } : { ok: false, result: (err || `exit ${code}`).trim().slice(0, 300) }); });
+      p.on('error', (e) => { clearTimeout(t); resolve({ ok: false, result: e.message }); });
+    });
+    if (!r.ok) log(`SHORTCUT ผิดพลาด | ${n} | ${r.result}`);
+    return r;
+  },
 };
 
 // ---------- HTTP ----------

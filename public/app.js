@@ -235,7 +235,7 @@ async function openSession(prebuffer = []) {
   try {
     const { token } = await api('/api/token', {});
     const ctx = await api('/api/context').catch(() => ({}));            // ความจำ + บทสนทนาล่าสุด
-    const extra = (ctx.memory ? `\n\nความจำ (สิ่งที่เคยจดไว้):\n${ctx.memory}` : '') + (ctx.recent ? `\n\nบทสนทนาล่าสุด (3 วัน):\n${ctx.recent}` : '');
+    const extra = (ctx.memory ? `\n\nความจำ (สิ่งที่เคยจดไว้):\n${ctx.memory}` : '') + (ctx.recent ? `\n\nบทสนทนาล่าสุด (3 วัน):\n${ctx.recent}` : '') + (ctx.shortcuts ? `\n\nShortcuts ที่สั่งได้: ${ctx.shortcuts}` : '');
     usage = { inText: 0, inAudio: 0, outText: 0, outAudio: 0 }; sessionStart = Date.now();
     const ai = new GoogleGenAI({ apiKey: token, httpOptions: { apiVersion: 'v1alpha' } });
     session = await ai.live.connect({

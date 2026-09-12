@@ -26,6 +26,7 @@ LaunchAgent `com.kron.friday-room` เปิด Friday.app ตอน login
 - `data/memory.md` — สิ่งที่ Friday จด (tool `remember`) · ส่งให้ Friday ทุกครั้งที่เริ่มคุย พร้อมบทสนทนาล่าสุด 3 วันจาก `~/logs/friday-chat.log`
 - `vault_lookup` — ค้นสถานะโปรเจกต์ใน `~/Vault/10-projects` ตอบทันที (ไม่ต้องรอ Claude)
 - `get_usage` / เมนู 💰 — ค่าใช้จ่ายเดือนนี้จาก token ที่ Gemini รายงาน (`data/usage.jsonl`, ราคาใน `config.json → pricing`) · โมเดลนี้ **ไม่มี free tier**
+- `run_shortcut` — สั่ง Apple Shortcuts (คุมบ้านผ่าน HomePod mini) เฉพาะชื่อใน `config.json → shortcutsAllowed`
 - คำสั่งเสียง: "ปิด" = ปิดไมค์จริง (⌥⌘F เรียกกลับ) · "บาย/พอแล้ว" = จบบทสนทนา รอคำปลุกต่อ
 
 ## ด่านความปลอดภัย

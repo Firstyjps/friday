@@ -106,6 +106,7 @@ enum ServerAPI {
         var out = ""
         if let m = o["memory"] as? String, !m.isEmpty { out += "\n\nความจำ (สิ่งที่เคยจดไว้):\n\(m)" }
         if let r = o["recent"] as? String, !r.isEmpty { out += "\n\nบทสนทนาล่าสุด (3 วัน):\n\(r)" }
+        if let sc = o["shortcuts"] as? String, !sc.isEmpty { out += "\n\nShortcuts ที่สั่งได้: \(sc)" }
         return out
     }
 

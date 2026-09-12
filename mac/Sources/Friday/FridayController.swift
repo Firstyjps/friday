@@ -57,6 +57,7 @@ final class FridayController: ObservableObject {
     private var confirms: [String: Confirm] = [:]
     private var userSpoke = false                 // ผู้ใช้พูดหลังจากข้อความที่เราส่งให้ Gemini ครั้งล่าสุด (กันผลงาน/เว็บ/Vault สั่งงานแทนผู้ใช้)
     private var friSpoke = false
+    private var muteAfterEnd = false              // เรียก end_conversation/stop_listening แล้ว → Gemini มักพูดลาซ้ำอีกรอบ ทิ้งเสียง/ข้อความหลังจากนั้น
     private var pendingResults: [String] = []
 
     // คำปลุก: VAD อยู่ใน WakeDetector (struct ล้วน) — ที่นี่แค่ส่ง clip ไป whisper
@@ -289,7 +290,7 @@ final class FridayController: ObservableObject {
         }
         sessionStart = nil
         ending = false; userTurn = ""
-        lastFri = ""; micLevel = 0; outLevel = 0; confirms = [:]; pendingConfirm = nil
+        lastFri = ""; micLevel = 0; outLevel = 0; confirms = [:]; pendingConfirm = nil; muteAfterEnd = false
         live?.close(); live = nil
         audio.flush()
         meIndex = nil; friIndex = nil; connectQueue = []
@@ -311,6 +312,7 @@ final class FridayController: ObservableObject {
             if pendingGreeting, let g = config?.greeting { live?.sendText(g) }
             pendingGreeting = false
         case .audio(let d):
+            if muteAfterEnd { return }
             outLevel = WakeDetector.rms(d)
             audio.play(pcm16: d)
         case .interrupted:
@@ -325,6 +327,7 @@ final class FridayController: ObservableObject {
                 confirms[k]!.heard = (newTurn ? "" : confirms[k]!.heard) + t
             }
         case .outputText(let t):
+            if muteAfterEnd { return }
             friTurn += t; friSpoke = true
             lastFri = friIndex == nil ? t : lastFri + t
             if let i = friIndex { messages[i].text += t } else { messages.append(.init(kind: .fri, text: t)); friIndex = messages.count - 1 }
@@ -353,7 +356,8 @@ final class FridayController: ObservableObject {
                 Task { let r = await ServerAPI.tool(name, args: args); live?.sendToolResponse(id: id, name: name, response: r) }
             }
             else if name == "end_conversation" || name == "stop_listening" {
-                live?.sendToolResponse(id: id, name: name, response: ["status": "ok"])
+                live?.sendToolResponse(id: id, name: name, response: ["status": "ok", "note": "ปิดแล้ว ไม่ต้องพูดอะไรเพิ่ม"])
+                muteAfterEnd = true                                  // ที่พูดไปก่อนเรียก tool ยังเล่นจนจบ ส่วนที่มาหลังจากนี้ทิ้ง
                 endAfterSpeech(mute: name == "stop_listening")
             }
             else if name == "confirm_task" {

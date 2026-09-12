@@ -11,7 +11,7 @@ const confirms = new Map();                  // job_id → { task, card, heard }
 
 const $ = (id) => document.getElementById(id);
 const orb = $('orb'), orbWrap = $('orbWrap'), statusEl = $('status'), logEl = $('log'), metaEl = $('meta'), muteBtn = $('muteBtn'), endBtn = $('endBtn');
-let micMuted = false;
+let micMuted = false, muteAfterEnd = false;   // หลังเรียก end tool → ทิ้งเสียง/ข้อความที่ Gemini พูดซ้ำ
 const CONVO = crypto.randomUUID();          // หนึ่งหน้า = หนึ่ง Claude session
 const NEEDS_TAP = 'needs-tap';
 const api = (path, body) => fetch(path, {
@@ -197,7 +197,8 @@ function onMessage(msg) {
         .then((r) => session?.sendToolResponse({ functionResponses: [{ id: fc.id, name: fc.name, response: r }] }));
     }
     else if (fc.name === 'end_conversation' || fc.name === 'stop_listening') {   // เว็บ: จบบทสนทนาหลัง Friday พูดลาจบ
-      session?.sendToolResponse({ functionResponses: [{ id: fc.id, name: fc.name, response: { status: 'ok' } }] });
+      session?.sendToolResponse({ functionResponses: [{ id: fc.id, name: fc.name, response: { status: 'ok', note: 'ปิดแล้ว ไม่ต้องพูดอะไรเพิ่ม' } }] });
+      muteAfterEnd = true;
       endAfterSpeech();
     }
     else reply(fc, { status: 'error', result: `ไม่มีเครื่องมือชื่อ ${fc.name}` });   // ไม่ตอบ = Gemini รอค้าง
@@ -207,14 +208,14 @@ function onMessage(msg) {
   if (msg.goAway) resumeSession();
   const sc = msg.serverContent;
   if (sc?.interrupted) stopPlayback();
-  for (const p of sc?.modelTurn?.parts ?? []) if (p.inlineData?.data) playPcm(p.inlineData.data);
+  if (!muteAfterEnd) for (const p of sc?.modelTurn?.parts ?? []) if (p.inlineData?.data) playPcm(p.inlineData.data);
   if (sc?.inputTranscription?.text) {
     const newTurn = !meBubble;
     meBubble ??= bubble('me'); meBubble.textContent += sc.inputTranscription.text; friBubble = null;
     userSpoke = true;
     for (const c of confirms.values()) if (c.armed) c.heard = (newTurn ? '' : c.heard) + sc.inputTranscription.text;   // เฉพาะ turn ล่าสุดหลัง Friday ถาม
   }
-  if (sc?.outputTranscription?.text) { friBubble ??= bubble('fri'); friBubble.textContent += sc.outputTranscription.text; meBubble = null; friSpoke = true; }
+  if (sc?.outputTranscription?.text && !muteAfterEnd) { friBubble ??= bubble('fri'); friBubble.textContent += sc.outputTranscription.text; meBubble = null; friSpoke = true; }
   if (sc?.turnComplete) {
     if (friSpoke) for (const c of confirms.values()) c.armed = true;   // Friday พูด (ถาม) แล้ว → เริ่มฟังคำตอบยืนยัน
     friSpoke = false; meBubble = null; friBubble = null; setTimeout(flushResults, 800);
@@ -319,7 +320,7 @@ function endSession() {
   if (session && usage) api('/api/usage', { ...usage, seconds: Math.round((Date.now() - sessionStart) / 1000), app: 'web' }).catch(() => {});
   usage = null;
   const s = session; session = null; try { s?.close(); } catch {}
-  stopPlayback(); orbWrap.classList.remove('live'); meBubble = friBubble = null; muteBtn.disabled = endBtn.disabled = true; micMuted = false; muteBtn.classList.remove('on'); metaEl.textContent = '';
+  stopPlayback(); orbWrap.classList.remove('live'); meBubble = friBubble = null; muteBtn.disabled = endBtn.disabled = true; micMuted = false; muteAfterEnd = false; muteBtn.classList.remove('on'); metaEl.textContent = '';
   setStatus(ROOM ? '💤 รอคำปลุก "Friday"' : 'แตะวงกลมเพื่อเริ่มคุย');
 }
 

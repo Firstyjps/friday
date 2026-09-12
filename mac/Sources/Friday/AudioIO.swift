@@ -37,7 +37,7 @@ final class AudioIO {
     private let micQueue = DispatchQueue(label: "friday.mic")
     private var pending = 0 { didSet { if (pending > 0) != (oldValue > 0) { onSpeakingChanged?(pending > 0) } } }
     private var generation = 0      // flush แล้ว completion ของ buffer เก่าที่ตามมาทีหลังต้องไม่ไปลด pending ของรอบใหม่
-    private var observers: [NSObjectProtocol] = []
+    private var observers: [(engine: AVAudioEngine, token: NSObjectProtocol)] = []
 
     private var vpUnsupported = false                 // ลอง voice processing แล้วไม่ได้ → ไม่ลองซ้ำจนกว่าจะเปิดแอปใหม่
     private var benchedInputs: [String: Date] = [:]   // ไมค์ที่เงียบสนิท (ไมค์ MacBook ตอนปิดฝา) → พักไว้ชั่วคราว
@@ -73,6 +73,7 @@ final class AudioIO {
         let outs = AudioDevices.candidates(input: false, priority: outputPriority)
         let ins = AudioDevices.candidates(input: true, priority: inputPriority, skip: Set(benchedInputs.keys))
         guard !outs.isEmpty, !ins.isEmpty else {
+            teardownAll()      // ปิด engine เก่าด้วย ไม่งั้นไมค์ที่ตายยังส่งเสียง 0 มาให้ตรวจซ้ำทุก 4 วิ (วน 4 วิแทน 60 วิ)
             throw NSError(domain: "Friday", code: 1, userInfo: [NSLocalizedDescriptionKey: "ไม่พบ\(outs.isEmpty ? "ลำโพง" : "ไมค์")ที่ใช้ได้"])
         }
 
@@ -126,7 +127,7 @@ final class AudioIO {
     }
 
     private func buildOutput(_ d: AudioDevice) throws {
-        if outEngine !== inEngine { outEngine.stop() } else { teardownAll() }
+        if outEngine !== inEngine { outEngine.stop(); unobserve(outEngine) } else { teardownAll() }
         let e = AVAudioEngine()
         let p = AVAudioPlayerNode()
         do {
@@ -140,7 +141,7 @@ final class AudioIO {
     }
 
     private func buildInput(_ d: AudioDevice) throws {
-        if inEngine !== outEngine { inEngine.stop(); inEngine.inputNode.removeTap(onBus: 0) }
+        if inEngine !== outEngine { inEngine.stop(); inEngine.inputNode.removeTap(onBus: 0); unobserve(inEngine) }
         let e = AVAudioEngine()
         do {
             try setDevice(e.inputNode.audioUnit, d.id)
@@ -154,7 +155,8 @@ final class AudioIO {
     private func installTap(_ e: AVAudioEngine) throws {
         let fmt = e.inputNode.outputFormat(forBus: 0)
         guard fmt.sampleRate > 0, fmt.channelCount > 0 else { throw NSError(domain: "Friday", code: 4, userInfo: [NSLocalizedDescriptionKey: "ไมค์ไม่มีสัญญาณ"]) }
-        converter = AVAudioConverter(from: fmt, to: micFormat)
+        let conv = AVAudioConverter(from: fmt, to: micFormat)
+        micQueue.sync { converter = conv; micBuffer.removeAll() }   // สลับ converter บนคิวเดียวกับที่ใช้ (กัน data race)
         e.inputNode.installTap(onBus: 0, bufferSize: 2048, format: fmt) { [weak self] buf, _ in
             self?.micQueue.async { self?.convertAndEmit(buf) }
         }
@@ -168,7 +170,7 @@ final class AudioIO {
     }
 
     private func teardownAll() {
-        observers.forEach(NotificationCenter.default.removeObserver); observers = []
+        observers.forEach { NotificationCenter.default.removeObserver($0.token) }; observers = []
         inEngine.stop(); inEngine.inputNode.removeTap(onBus: 0)
         outEngine.stop()
     }
@@ -177,9 +179,14 @@ final class AudioIO {
     /// รอให้นิ่ง 1.5 วิ แล้วเช็คว่า engine หยุดจริงไหม ถ้ายังวิ่งอยู่ก็ไม่ต้องทำอะไร (กันวนสร้างใหม่ไม่จบ)
     private var pendingHealth: DispatchWorkItem?
     private func observe(_ e: AVAudioEngine) {
-        observers.append(NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: e, queue: .main) { [weak self] _ in
+        observers.append((e, NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: e, queue: .main) { [weak self] _ in
             self?.scheduleHealthCheck()
-        })
+        }))
+    }
+
+    /// ถอด observer ของ engine ที่เลิกใช้ (ไม่งั้นรายการโตทุกครั้งที่สร้างใหม่)
+    private func unobserve(_ e: AVAudioEngine) {
+        observers.removeAll { if $0.engine === e { NotificationCenter.default.removeObserver($0.token); return true }; return false }
     }
 
     private func scheduleHealthCheck() {
@@ -197,6 +204,7 @@ final class AudioIO {
     /// เสียบ/ถอดอุปกรณ์ → รอให้นิ่ง 1 วิ แล้วค่อยดูว่ามีตัวที่ดีกว่าไหม (กันวนตอน macOS สร้างอุปกรณ์ชั่วคราว)
     private func scheduleReselect() {
         onHardwareChange?()
+        benchedInputs = [:]              // เสียบ/ถอดอุปกรณ์ → ให้โอกาสไมค์ที่เคยพักไว้อีกครั้ง
         guard !building else { return }
         pendingReselect?.cancel()
         let w = DispatchWorkItem { [weak self] in self?.reselect(force: false) }
@@ -249,8 +257,8 @@ final class AudioIO {
         DispatchQueue.main.async { [weak self] in
             guard let self, !self.building else { return }
             let name = self.inputName
-            Log.write("audio: ไมค์ \(name) เงียบสนิท → พักไว้ 10 นาที เปลี่ยนตัวถัดไป")
-            self.benchedInputs[name] = Date().addingTimeInterval(600)
+            Log.write("audio: ไมค์ \(name) เงียบสนิท → พักไว้ 2 นาที เปลี่ยนตัวถัดไป")
+            self.benchedInputs[name] = Date().addingTimeInterval(120)   // สั้นพอให้กลับมาใช้ได้เร็วหลังเปิดฝา (ไม่มีวนถี่แล้วเพราะ start() ปิด engine ก่อน throw)
             self.reselect(force: true)
         }
     }

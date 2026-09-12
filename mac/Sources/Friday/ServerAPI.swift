@@ -9,6 +9,7 @@ enum ServerAPI {
         let id: String
         let status: String          // running | done | error | needs_confirmation | cancelled
         let result: String?
+        let reason: String?         // ทำไมต้องยืนยัน (needs_confirmation)
         let task: String
     }
 
@@ -25,6 +26,7 @@ enum ServerAPI {
         var farewell: String? = nil
         var speechConfig: JSONValue? = nil
         var serverTools: [String]? = nil
+        var maxSessionSec: Double? = nil
     }
 
     enum APIError: LocalizedError {
@@ -65,8 +67,9 @@ enum ServerAPI {
         return t
     }
 
-    static func runOnMac(task: String, convo: String) async throws -> Job {
-        try JSONDecoder().decode(Job.self, from: try await request("/api/mac", method: "POST", json: ["task": task, "convo": convo], timeout: 60))
+    /// forceConfirm: แอปไม่ได้ยินผู้ใช้สั่งงานนี้ → ให้ server กักไว้ถามยืนยันก่อน
+    static func runOnMac(task: String, convo: String, forceConfirm: Bool = false) async throws -> Job {
+        try JSONDecoder().decode(Job.self, from: try await request("/api/mac", method: "POST", json: ["task": task, "convo": convo, "confirm": forceConfirm], timeout: 60))
     }
 
     static func confirm(id: String, approve: Bool) async throws -> Job {
@@ -91,9 +94,14 @@ enum ServerAPI {
     }
 
     /// ตอนแอปปิด (ต้องเสร็จก่อน process จบ) → server ปิดหูสำรองจนกว่าแอปจะเปิดใหม่
-    static func quitSync() {
-        var req = URLRequest(url: base.appending(path: "/api/app-quit"), timeoutInterval: 2)
+    static func quitSync() { postSync("/api/app-quit") }
+
+    /// POST แบบรอให้เสร็จ (ใช้เฉพาะตอน process กำลังจะจบ)
+    static func postSync(_ path: String, json: [String: Any] = [:]) {
+        var req = URLRequest(url: base.appending(path: path), timeoutInterval: 2)
         req.httpMethod = "POST"; req.setValue("1", forHTTPHeaderField: "X-Friday")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: json)
         let done = DispatchSemaphore(value: 0)
         URLSession.shared.dataTask(with: req) { _, _, _ in done.signal() }.resume()
         _ = done.wait(timeout: .now() + 2)

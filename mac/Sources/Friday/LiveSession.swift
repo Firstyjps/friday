@@ -10,6 +10,8 @@ final class LiveSession: NSObject, URLSessionWebSocketDelegate {
         case interrupted
         case turnComplete
         case toolCall(id: String, name: String, args: [String: Any])
+        case toolCancelled([String])      // ผู้ใช้พูดแทรกระหว่าง tool call → Gemini ยกเลิก
+        case goAway(String)               // Gemini เตือนว่าจะปิดการเชื่อมต่อ (timeLeft)
         case closed(String)
     }
 
@@ -127,6 +129,8 @@ final class LiveSession: NSObject, URLSessionWebSocketDelegate {
                 onEvent?(.toolCall(id: c["id"] as? String ?? "", name: c["name"] as? String ?? "", args: c["args"] as? [String: Any] ?? [:]))
             }
         }
+        if let tc = m["toolCallCancellation"] as? [String: Any] { onEvent?(.toolCancelled(tc["ids"] as? [String] ?? [])) }
+        if let g = m["goAway"] as? [String: Any] { onEvent?(.goAway(g["timeLeft"] as? String ?? "")) }
         guard let sc = m["serverContent"] as? [String: Any] else { return }
         if sc["interrupted"] as? Bool == true { onEvent?(.interrupted) }
         if let turn = sc["modelTurn"] as? [String: Any], let parts = turn["parts"] as? [[String: Any]] {

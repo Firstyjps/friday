@@ -23,8 +23,15 @@ final class LiveSession: NSObject, URLSessionWebSocketDelegate {
 
     /// token ที่ Gemini รายงาน (รวมทั้ง session) แยกตามชนิด → คิดค่าใช้จ่าย
     private(set) var usage: [String: Int] = ["inText": 0, "inAudio": 0, "outText": 0, "outAudio": 0]
+    /// usageMetadata ดิบทุก message (ไว้เทียบสูตรค่าใช้จ่ายกับบิลจริง — ดูใน selftest)
+    private(set) var usageLog: [String] = []
+    /// handle สำหรับต่อ session เดิมหลัง goAway (Gemini ส่ง sessionResumptionUpdate มาให้เป็นระยะ)
+    private(set) var resumeHandle: String?
 
-    func connect(token: String, config: ServerAPI.Config, extraSystem: String = "") {
+    /// ต่อ session ใหม่จากของเดิม → ยอดใช้งานนับต่อ
+    func carryUsage(_ u: [String: Int]) { usage = u }
+
+    func connect(token: String, config: ServerAPI.Config, extraSystem: String = "", resumeHandle: String? = nil) {
         let q = token.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? token
         let url = URL(string: "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=\(q)")!
         setup = ["setup": [
@@ -35,6 +42,7 @@ final class LiveSession: NSObject, URLSessionWebSocketDelegate {
             "inputAudioTranscription": [:] as [String: Any],
             "outputAudioTranscription": [:] as [String: Any],
             "contextWindowCompression": ["slidingWindow": [:] as [String: Any]],
+            "sessionResumption": (resumeHandle.map { ["handle": $0] } ?? [:]) as [String: Any],
         ]]
         session = URLSession(configuration: .default, delegate: self, delegateQueue: .main)
         task = session?.webSocketTask(with: url)
@@ -116,7 +124,11 @@ final class LiveSession: NSObject, URLSessionWebSocketDelegate {
 
     private func handle(_ m: [String: Any]) {
         if m["setupComplete"] != nil { onEvent?(.open) }
+        if let u = m["sessionResumptionUpdate"] as? [String: Any], u["resumable"] as? Bool == true, let h = u["newHandle"] as? String, !h.isEmpty {
+            resumeHandle = h
+        }
         if let u = m["usageMetadata"] as? [String: Any] {
+            usageLog.append("prompt=\(u["promptTokenCount"] ?? 0) response=\(u["responseTokenCount"] ?? 0) total=\(u["totalTokenCount"] ?? 0)")
             for (key, dir) in [("promptTokensDetails", "in"), ("responseTokensDetails", "out")] {
                 for d in u[key] as? [[String: Any]] ?? [] {
                     let kind = (d["modality"] as? String ?? "").uppercased() == "AUDIO" ? "Audio" : "Text"

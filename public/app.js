@@ -182,7 +182,7 @@ function onMessage(msg) {
   const reply = (fc, response) => session?.sendToolResponse({ functionResponses: [{ id: fc.id, name: fc.name, response }] });
   for (const fc of msg.toolCall?.functionCalls ?? []) {
     // เครื่องมือที่ "ลงมือ" ต้องมาจากเสียงผู้ใช้จริง ไม่ใช่จากข้อความที่เราส่งให้ Gemini (ผลงาน/เว็บ/Vault) — กัน prompt injection
-    const acts = ['run_on_mac', 'remember', 'run_shortcut'].includes(fc.name);
+    const acts = (CFG.actionTools ?? ['run_on_mac', 'remember', 'run_shortcut', 'open_app', 'open_url']).includes(fc.name);
     if (fc.name === 'run_on_mac') runOnMac(fc, !userSpoke);
     else if (acts && !userSpoke) { bubble('sys', `🛡️ บล็อก ${fc.name}: ไม่ได้ยินผู้ใช้สั่ง`); reply(fc, { ok: false, status: 'blocked', result: 'ไม่ได้ยินผู้ใช้สั่งงานนี้ด้วยเสียง ต้องให้ผู้ใช้พูดสั่งเอง' }); }
     else if (fc.name === 'confirm_task') confirmTask(fc);
@@ -197,7 +197,8 @@ function onMessage(msg) {
     else reply(fc, { status: 'error', result: `ไม่มีเครื่องมือชื่อ ${fc.name}` });   // ไม่ตอบ = Gemini รอค้าง
   }
   if (msg.toolCallCancellation) bubble('sys', `(ยกเลิก tool ${msg.toolCallCancellation.ids?.join(',')})`);
-  if (msg.goAway) bubble('sys', `⚠️ Gemini จะปิดการเชื่อมต่อ (${msg.goAway.timeLeft ?? ''})`);
+  if (msg.sessionResumptionUpdate?.resumable && msg.sessionResumptionUpdate.newHandle) resumeHandle = msg.sessionResumptionUpdate.newHandle;
+  if (msg.goAway) resumeSession();
   const sc = msg.serverContent;
   if (sc?.interrupted) stopPlayback();
   for (const p of sc?.modelTurn?.parts ?? []) if (p.inlineData?.data) playPcm(p.inlineData.data);
@@ -259,14 +260,23 @@ function onMicChunk(buf) {
 const sendAudio = (buf) => session?.sendRealtimeInput({ audio: { data: toB64(buf), mimeType: 'audio/pcm;rate=16000' } });
 
 // ---------- Gemini session ----------
-async function openSession(prebuffer = []) {
+let resumeHandle = null, lastExtra = '';
+// Gemini เตือน goAway → ต่อ session ใหม่ด้วย handle เดิม (บทสนทนาต่อเนื่อง)
+async function resumeSession() {
+  if (!session || !resumeHandle) { bubble('sys', '⚠️ ต่อ session ไม่ได้ — พักก่อน'); endSession(); return; }
+  const s = session; session = null; try { s.close(); } catch {}
+  try { await openSession([], { resume: resumeHandle }); } catch (e) { bubble('sys', '⚠️ ' + e.message); endSession(); }
+}
+
+async function openSession(prebuffer = [], { resume = null } = {}) {
   connecting = true; connectQueue.push(...prebuffer);
   setStatus('กำลังเชื่อมต่อ…');
   try {
-    const [{ token }, ctx] = await Promise.all([api('/api/token', {}), api('/api/context').catch(() => ({}))]);   // token + ความจำ พร้อมกัน
+    const [{ token }, ctx] = await Promise.all([api('/api/token', {}), resume ? Promise.resolve(null) : api('/api/context').catch(() => ({}))]);   // token + ความจำ พร้อมกัน
     userSpoke = false;
-    const extra = (ctx.memory ? `\n\nความจำ (สิ่งที่เคยจดไว้):\n${ctx.memory}` : '') + (ctx.recent ? `\n\nบทสนทนาล่าสุด (3 วัน):\n${ctx.recent}` : '') + (ctx.shortcuts ? `\n\nShortcuts ที่สั่งได้: ${ctx.shortcuts}` : '');
-    usage = { inText: 0, inAudio: 0, outText: 0, outAudio: 0 }; sessionStart = Date.now();
+    const extra = resume ? lastExtra : (ctx.memory ? `\n\nความจำ (สิ่งที่เคยจดไว้):\n${ctx.memory}` : '') + (ctx.recent ? `\n\nบทสนทนาล่าสุด (3 วัน):\n${ctx.recent}` : '') + (ctx.shortcuts ? `\n\nShortcuts ที่สั่งได้: ${ctx.shortcuts}` : '');
+    lastExtra = extra;
+    if (!resume) { usage = { inText: 0, inAudio: 0, outText: 0, outAudio: 0 }; sessionStart = Date.now(); resumeHandle = null; }
     const ai = new GoogleGenAI({ apiKey: token, httpOptions: { apiVersion: 'v1alpha' } });
     session = await ai.live.connect({
       model: MODEL,
@@ -278,6 +288,7 @@ async function openSession(prebuffer = []) {
         inputAudioTranscription: {},
         outputAudioTranscription: {},
         contextWindowCompression: { slidingWindow: {} },
+        sessionResumption: resume ? { handle: resume } : {},
       },
       callbacks: {
         onopen: () => { setStatus('ฟังอยู่… พูดได้เลย'); orb.classList.add('live'); },

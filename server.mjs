@@ -2,7 +2,7 @@
 // + /api/mac: รับงานจาก tool run_on_mac → รัน Claude Code บน Mac → คืนผล (+ Telegram สำรอง)
 import http from 'node:http';
 import { spawn } from 'node:child_process';
-import { readFile, appendFile, mkdir, readdir } from 'node:fs/promises';
+import { readFile, appendFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { extname, join } from 'node:path';
@@ -33,13 +33,25 @@ async function createToken() {
     body: JSON.stringify({
       uses: 1,
       expireTime: new Date(now + 30 * 60e3).toISOString(),
-      newSessionExpireTime: new Date(now + 60e3).toISOString(),
+      newSessionExpireTime: new Date(now + TOKEN_FRESH_MS).toISOString(),
     }),
   });
   const body = await res.json();
   if (!res.ok) throw new Error(`auth_tokens ${res.status}: ${JSON.stringify(body).slice(0, 300)}`);
   return body.name;
 }
+// เตรียม token สำรองไว้ล่วงหน้า 1 ใบ → ตอนปลุกไม่ต้องรอ Google (ประหยัด ~0.3–0.6 วิ) · token ใช้ได้ครั้งเดียว จึง mint ใบใหม่ทันทีที่ถูกหยิบ
+const TOKEN_FRESH_MS = 5 * 60e3;
+let spareToken = null;                 // { name, at }
+function prefillToken() { if (!KEY) return; createToken().then((name) => { spareToken = { name, at: Date.now() }; }).catch((e) => log(`token prefill: ${e.message}`)); }
+async function getToken() {
+  const t = spareToken; spareToken = null;
+  prefillToken();
+  if (t && Date.now() - t.at < TOKEN_FRESH_MS - 30e3) return t.name;
+  return createToken();
+}
+setTimeout(prefillToken, 1500);
+setInterval(() => { if (!spareToken || Date.now() - spareToken.at > TOKEN_FRESH_MS - 45e3) prefillToken(); }, 60e3);
 
 // ---------- Telegram (บอท Hermes, ส่งออกอย่างเดียว) ----------
 let tgCfg;
@@ -331,6 +343,20 @@ async function usageSummary() {
            thb: Math.round(usd * 33 * 10) / 10, note: 'ประมาณจาก token ที่ Gemini รายงาน (ราคา Gemini 3.1 Flash Live, ไม่มี free tier)' };
 }
 
+// ความจำยาวเกิน → ให้ Claude ย่อให้เหลือ ≤ 30 บรรทัด (สำรองไฟล์เดิมเป็น memory.md.bak) — เช็คทุก 6 ชม.
+async function condenseMemory() {
+  const lines = (await readText(MEMORY)).trim().split('\n').filter(Boolean);
+  if (lines.length < 60) return;
+  log(`MEMORY condense: ${lines.length} บรรทัด`);
+  const r = await runClaude(`นี่คือไฟล์ความจำของผู้ช่วยเสียง Friday (บรรทัดละ 1 เรื่อง ขึ้นต้นด้วยวันที่) ช่วยย่อให้เหลือไม่เกิน 30 บรรทัด: รวมเรื่องซ้ำ ตัดเรื่องที่หมดอายุ (นัดที่ผ่านไปแล้ว) เก็บความชอบ/ข้อเท็จจริงถาวร/เรื่องสำคัญไว้ครบ รูปแบบเดิม "- YYYY-MM-DD ข้อความ" ตอบเฉพาะบรรทัดความจำเท่านั้น ไม่มีคำอธิบาย:\n\n${lines.join('\n')}`, null, false);
+  const out = r.text.split('\n').map((l) => l.trim()).filter((l) => /^- \d{4}-\d{2}-\d{2} /.test(l));
+  if (!r.ok || out.length < 5 || out.length > 45) return log(`MEMORY condense ล้มเหลว (${out.length} บรรทัด)`);
+  await appendFile(MEMORY + '.bak', `\n# ${today()}\n${lines.join('\n')}\n`);
+  await writeFile(MEMORY, out.join('\n') + '\n');
+  log(`MEMORY condense → ${out.length} บรรทัด`);
+}
+setTimeout(condenseMemory, 5 * 60e3); setInterval(condenseMemory, 6 * 3600e3);
+
 const serverTools = {
   remember: async ({ note }) => {
     if (!note) return { ok: false };
@@ -341,6 +367,27 @@ const serverTools = {
   },
   vault_lookup: async ({ query }) => vaultLookup(query || ''),
   get_usage: async () => usageSummary(),
+  // fast lane: งานง่ายๆ ทำเองที่ server (0.2 วิ) ไม่ต้องผ่าน Claude (10+ วิ)
+  open_app: async ({ name }) => {
+    const n = String(name || '').trim();
+    if (!/^[\w .&+-]{1,40}$/.test(n)) return { ok: false, result: 'ชื่อแอปไม่ถูกต้อง' };
+    const out = await sh('/usr/bin/open', ['-a', n]);
+    log(`OPEN app | ${n}${out ? ` | ${out.trim().slice(0, 100)}` : ''}`);
+    return out.includes('Unable') ? { ok: false, result: `ไม่พบแอปชื่อ ${n}` } : { ok: true, result: `เปิด ${n} แล้ว` };
+  },
+  open_url: async ({ url }) => {
+    const u = String(url || '').trim();
+    if (!/^https?:\/\/[^\s"']+$/i.test(u)) return { ok: false, result: 'ต้องเป็น URL http/https' };
+    await sh('/usr/bin/open', [u]); log(`OPEN url | ${u}`);
+    return { ok: true, result: `เปิด ${u} แล้ว` };
+  },
+  system_info: async () => {
+    const now = new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok', dateStyle: 'full', timeStyle: 'short' });
+    const df = (await sh('/bin/df', ['-h', '/'])).split('\n')[1]?.split(/\s+/) ?? [];
+    const batt = (await sh('/usr/bin/pmset', ['-g', 'batt'])).match(/(\d+)%;\s*([\w ]+)/);
+    return { ok: true, datetime: now, disk: df.length > 4 ? `ทั้งหมด ${df[1]} ใช้ไป ${df[2]} เหลือ ${df[3]} (${df[4]})` : 'ไม่ทราบ',
+             battery: batt ? `${batt[1]}% (${batt[2].trim()})` : 'ไม่มีข้อมูล', uptime: (await sh('/usr/bin/uptime', [])).trim() };
+  },
   // Apple Shortcuts (คุมบ้านผ่าน HomePod mini / Apple Home) — เฉพาะชื่อใน config.shortcutsAllowed
   run_shortcut: async ({ name }) => {
     const allowed = JSON.parse(await readText(join(PUBLIC, 'config.json')) || '{}').shortcutsAllowed ?? [];
@@ -388,7 +435,7 @@ http.createServer(async (req, res) => {
         const wake = Date.now() - pendingWakeAt < 20000; pendingWakeAt = 0;
         return json(res, 200, { wake });
       }
-      if (req.method === 'POST' && url.pathname === '/api/token') return json(res, 200, { token: await createToken() });
+      if (req.method === 'POST' && url.pathname === '/api/token') return json(res, 200, { token: await getToken() });
       if (req.method === 'GET' && url.pathname === '/api/context') return json(res, 200, await context());
       if (req.method === 'GET' && url.pathname === '/api/usage') return json(res, 200, await usageSummary());
       if (req.method === 'POST' && url.pathname === '/api/usage') {

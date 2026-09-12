@@ -25,13 +25,13 @@ enum SelfTest {
                             s.sendToolResponse(id: id, name: name, response: ["status": "done", "result": "มี 33 โฟลเดอร์ (selftest)"])
                         }
                     case .turnComplete where !tool.isEmpty:
-                        print("audio bytes=\(audioBytes) text=\(text)"); print("usage=\(s.usage)"); s.close(); exit(0)
+                        print("audio bytes=\(audioBytes) text=\(text)"); print("usage=\(s.usage)"); print("usageMetadata raw:\n  " + s.usageLog.joined(separator: "\n  ")); print("resumeHandle=\(s.resumeHandle != nil)"); s.close(); exit(0)
                     case .closed(let why): print("closed: \(why)"); exit(tool.isEmpty ? 1 : 0)
                     default: break
                     }
                 }
                 s.connect(token: token, config: cfg, extraSystem: await ServerAPI.contextText())
-                try await Task.sleep(for: .seconds(40)); print("timeout audio=\(audioBytes) text=\(text) tool=\(tool)"); exit(2)
+                try await Task.sleep(for: .seconds(40)); print("timeout audio=\(audioBytes) text=\(text) tool=\(tool)"); print("usage=\(s.usage)"); print("usageMetadata raw:\n  " + s.usageLog.joined(separator: "\n  ")); print("resumeHandle=\(s.resumeHandle != nil)"); exit(tool.isEmpty && text.isEmpty ? 2 : 0)
             } catch { print("error: \(error)"); exit(1) }
         }
     }

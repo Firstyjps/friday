@@ -222,20 +222,11 @@ final class FridayController: ObservableObject {
                 async let extraReq = ServerAPI.contextText()   // ความจำ + บทสนทนาล่าสุด (ขอพร้อมกับ token)
                 let token = try await tokenReq
                 let extra = await extraReq
-                let s = LiveSession()
-                s.onEvent = { [weak self, weak s] e in MainActor.assumeIsolated {
-                    guard let self, let s, self.live === s else { return }   // event ค้างจาก session เก่าต้องไม่ปนกับ session ใหม่
-                    self.onLive(e)
-                } }
-                live = s
+                lastExtra = extra
                 sessionStart = Date()
                 userSpoke = false; friSpoke = false
-                s.connect(token: token, config: config, extraSystem: extra)
                 pendingGreeting = greet
-                DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self, weak s] in   // เชื่อมต่อค้าง → ไม่ปล่อยให้อยู่ใน connecting ตลอด
-                    guard let self, let s, self.live === s, self.phase == .connecting else { return }
-                    self.sys("⚠️ เชื่อมต่อ Gemini ไม่สำเร็จ (หมดเวลา)"); self.endSession()
-                }
+                attach(LiveSession(), token: token, extra: extra, resumeHandle: nil)
             } catch {
                 sys("⚠️ เชื่อมต่อไม่ได้: \(error.localizedDescription)")
                 endSession()
@@ -244,6 +235,38 @@ final class FridayController: ObservableObject {
     }
 
     private var pendingGreeting = false
+    private var lastExtra = ""
+
+    /// ผูก session ใหม่เข้ากับ controller แล้วเชื่อมต่อ (ใช้ทั้งตอนปลุกและตอนต่อ session เดิมหลัง goAway)
+    private func attach(_ s: LiveSession, token: String, extra: String, resumeHandle: String?) {
+        guard let config else { return }
+        s.onEvent = { [weak self, weak s] e in MainActor.assumeIsolated {
+            guard let self, let s, self.live === s else { return }   // event ค้างจาก session เก่าต้องไม่ปนกับ session ใหม่
+            self.onLive(e)
+        } }
+        live = s
+        s.connect(token: token, config: config, extraSystem: extra, resumeHandle: resumeHandle)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self, weak s] in   // เชื่อมต่อค้าง → ไม่ปล่อยให้อยู่ใน connecting ตลอด
+            guard let self, let s, self.live === s, self.phase == .connecting else { return }
+            self.sys("⚠️ เชื่อมต่อ Gemini ไม่สำเร็จ (หมดเวลา)"); self.endSession()
+        }
+    }
+
+    /// Gemini เตือน goAway → ต่อ session ใหม่ด้วย handle เดิม (บทสนทนาต่อเนื่อง ผู้ใช้ไม่รู้สึก)
+    private func resumeSession() {
+        guard let old = live, phase == .live else { return }
+        guard let handle = old.resumeHandle else { sys("⚠️ ต่อ session ไม่ได้ (ไม่มี handle) — พักก่อน"); endSession(); return }
+        Log.write("session: resume (goAway)")
+        old.close()
+        setPhase(.connecting)
+        Task {
+            do {
+                let token = try await ServerAPI.token()
+                let s = LiveSession(); s.carryUsage(old.usage)
+                attach(s, token: token, extra: lastExtra, resumeHandle: handle)
+            } catch { sys("⚠️ ต่อ session ไม่ได้: \(error.localizedDescription)"); endSession() }
+        }
+    }
 
     func toggle() {
         switch phase {
@@ -332,7 +355,7 @@ final class FridayController: ObservableObject {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in self?.flushResults() }
         case .toolCall(let id, let name, let args):
             // เครื่องมือที่ "ลงมือ" ต้องมาจากเสียงผู้ใช้จริง ไม่ใช่จากข้อความที่เราส่งให้ Gemini (ผลงาน/เว็บ/Vault) — กัน prompt injection
-            let acts = ["run_on_mac", "remember", "run_shortcut"].contains(name)
+            let acts = (config?.actionTools ?? ["run_on_mac", "remember", "run_shortcut", "open_app", "open_url"]).contains(name)
             if name == "run_on_mac" { runOnMac(id: id, name: name, task: args["task"] as? String ?? "", force: !userSpoke) }
             else if acts && !userSpoke {
                 sys("🛡️ บล็อก \(name): ไม่ได้ยินผู้ใช้สั่ง")
@@ -353,7 +376,8 @@ final class FridayController: ObservableObject {
         case .toolCancelled(let ids):
             Log.write("session: toolCallCancellation \(ids)")
         case .goAway(let why):
-            sys("⚠️ Gemini จะปิดการเชื่อมต่อ (\(why))"); Log.write("session: goAway \(why)")
+            Log.write("session: goAway \(why)")
+            resumeSession()
         case .closed(let why):
             Log.write("session: closed \(why)")
             if phase == .live || phase == .connecting {

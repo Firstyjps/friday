@@ -25,6 +25,8 @@ LaunchAgent `com.kron.friday-room` เปิด Friday.app ตอน login
 
 - `data/memory.md` — สิ่งที่ Friday จด (tool `remember`) · ส่งให้ Friday ทุกครั้งที่เริ่มคุย พร้อมบทสนทนาล่าสุด 3 วันจาก `~/logs/friday-chat.log`
 - `vault_lookup` — ค้นสถานะโปรเจกต์ใน `~/Vault/10-projects` ตอบทันที (ไม่ต้องรอ Claude)
+- fast lane ฝั่ง server (0.2 วิ ไม่ผ่าน Claude): `open_app`, `open_url`, `system_info` (วันเวลา/ดิสก์/แบต) · `run_shortcut` คุมบ้าน
+- ความจำเกิน 60 บรรทัด → Claude ย่อให้เหลือ ≤ 30 อัตโนมัติ (สำรองที่ `memory.md.bak`) · token Gemini เตรียมไว้ล่วงหน้า (ปลุกเร็วขึ้น ~0.5 วิ) · Gemini ส่ง goAway → ต่อ session เดิมอัตโนมัติ (session resumption)
 - `get_usage` / เมนู 💰 — ค่าใช้จ่ายเดือนนี้จาก token ที่ Gemini รายงาน (`data/usage.jsonl`, ราคาใน `config.json → pricing`) · โมเดลนี้ **ไม่มี free tier**
 - `run_shortcut` — สั่ง Apple Shortcuts (คุมบ้านผ่าน HomePod mini) เฉพาะชื่อใน `config.json → shortcutsAllowed`
 - คำสั่งเสียง: "ปิด" = ปิดไมค์จริง (⌥⌘F เรียกกลับ) · "บาย/พอแล้ว" = จบบทสนทนา รอคำปลุกต่อ

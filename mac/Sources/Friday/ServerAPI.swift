@@ -27,6 +27,7 @@ enum ServerAPI {
         var speechConfig: JSONValue? = nil
         var serverTools: [String]? = nil
         var maxSessionSec: Double? = nil
+        var actionTools: [String]? = nil     // เครื่องมือที่ลงมือทำ → ต้องตามหลังเสียงผู้ใช้
     }
 
     enum APIError: LocalizedError {

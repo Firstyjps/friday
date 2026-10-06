@@ -6,9 +6,9 @@ import { readFile, appendFile, writeFile, mkdir, readdir } from 'node:fs/promise
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { extname, join } from 'node:path';
-import { RISKY, READ_ONLY_TOOLS, HARD_DENY, CONFIRM_MARK, WAKE, frameResult } from './lib/rules.mjs';
+import { RISKY, READ_ONLY_TOOLS, HARD_DENY, SECRET_DENY, agentEnv, CONFIRM_MARK, WAKE, frameResult } from './lib/rules.mjs';
 import { AgentSession } from './lib/claude-agent.mjs';
-import { decide as policyDecide, ruleKey, RuleStore } from './lib/policy.mjs';
+import { decide as policyDecide, secretCheck, ruleKey, RuleStore } from './lib/policy.mjs';
 
 const PORT = Number(process.env.PORT || 4850);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -92,13 +92,13 @@ const CONFIRMED_TIMEOUT_MS = 30 * 60e3;
 function runClaude(task, resumeId, confirmed) {
   return new Promise((resolve) => {
     const perms = confirmed
-      ? ['--dangerously-skip-permissions', '--disallowedTools', ...HARD_DENY, '--max-turns', '60']
-      : ['--permission-mode', 'default', '--allowedTools', ...READ_ONLY_TOOLS, '--disallowedTools', ...HARD_DENY, '--max-turns', '20'];
+      ? ['--dangerously-skip-permissions', '--disallowedTools', ...HARD_DENY, ...SECRET_DENY, '--max-turns', '60']
+      : ['--permission-mode', 'default', '--allowedTools', ...READ_ONLY_TOOLS, '--disallowedTools', ...HARD_DENY, ...SECRET_DENY, '--max-turns', '20'];
     const args = ['-p', '--output-format', 'json', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
       '--append-system-prompt', SYSTEM_RULES + (confirmed ? '' : READ_ONLY_RULES), ...perms];
     if (resumeId) args.push('--resume', resumeId);
     args.push('--', task);
-    const child = spawn(CLAUDE, args, { cwd: HOME, env: { ...process.env, ENABLE_CLAUDEAI_MCP_SERVERS: 'false', PATH: `${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:${process.env.PATH}` } });
+    const child = spawn(CLAUDE, args, { cwd: HOME, env: agentEnv({ PATH: `${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:${process.env.PATH}` }) });
     let out = '', err = '', timedOut = false;
     const timer = setTimeout(() => { timedOut = true; child.kill(); }, confirmed ? CONFIRMED_TIMEOUT_MS : UNCONFIRMED_TIMEOUT_MS);
     child.stdout.on('data', (d) => { out += d; });
@@ -138,8 +138,9 @@ function agentFor(convo, c) {
     onPermission: async (tool, input, signal) => {
       const job = c.currentJob;
       if (!job) return false;
-      if (job.confirmed) return true;                          // ยืนยันงานนี้ไปแล้ว → ทำต่อได้
       const cfg = JSON.parse(await readText(join(PUBLIC, 'config.json')) || '{}');
+      const secret = secretCheck(tool, input, cfg.protectedPaths);
+      if (job.confirmed && !secret) return true;               // ยืนยันงานนี้ไปแล้ว → ทำต่อได้ ยกเว้นแตะไฟล์ลับ (ถามทุกครั้ง)
       const d = policyDecide(tool, input, { trust: cfg.trust ?? 'relaxed', rules: ruleStore.rules, protectedPaths: cfg.protectedPaths });
       if (d.allow) { log(`JOB ${job.id} auto-allow ${describeTool(tool, input).slice(0, 120)} (${d.why})`); return true; }
       job.pendingTool = { tool, input };

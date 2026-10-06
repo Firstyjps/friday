@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreAudio
+import ObjCTry
 
 /// ไมค์ + ลำโพงของ Friday
 /// - เลือกอุปกรณ์เองตามลำดับใน config.json อันไหนเปิดไม่ได้ข้ามไปตัวถัดไป (ไม่เปลี่ยน default ของทั้งเครื่อง)
@@ -157,9 +158,15 @@ final class AudioIO {
         guard fmt.sampleRate > 0, fmt.channelCount > 0 else { throw NSError(domain: "Friday", code: 4, userInfo: [NSLocalizedDescriptionKey: "ไมค์ไม่มีสัญญาณ"]) }
         let conv = AVAudioConverter(from: fmt, to: micFormat)
         micQueue.sync { converter = conv; micBuffer.removeAll() }   // สลับ converter บนคิวเดียวกับที่ใช้ (กัน data race)
-        e.inputNode.installTap(onBus: 0, bufferSize: 2048, format: fmt) { [weak self] buf, _ in
-            self?.micQueue.async { self?.convertAndEmit(buf) }
-        }
+        // อุปกรณ์เพิ่งเปลี่ยน (ถอดไมค์นอก) → format ที่อ่านได้อาจไม่ตรง hardware แล้ว installTap โยน NSException ทำแอปตาย (15 ก.ย.)
+        // ดักไว้ → throw ปกติ → ข้ามไปไมค์ตัวถัดไป / วนลองใหม่
+        var err: NSError?
+        let ok = FridayObjCTry({
+            e.inputNode.installTap(onBus: 0, bufferSize: 2048, format: fmt) { [weak self] buf, _ in
+                self?.micQueue.async { self?.convertAndEmit(buf) }
+            }
+        }, &err)
+        if !ok { throw err ?? NSError(domain: "Friday", code: 6) }
     }
 
     private func setDevice(_ unit: AudioUnit?, _ id: AudioDeviceID) throws {

@@ -98,6 +98,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let m = NSMenu()
         let talking = controller.phase == .live || controller.phase == .connecting
         m.addItem(withTitle: talking ? "หยุดคุย" : "คุยกับ Friday  (⌥⌘F)", action: #selector(toggleTalk), keyEquivalent: "").target = self
+        if talking { m.addItem(withTitle: controller.micMuted ? "เปิดไมค์" : "ปิดไมค์ชั่วคราว", action: #selector(toggleMic), keyEquivalent: "").target = self }
         m.addItem(withTitle: "ประวัติการคุย", action: #selector(showWindow), keyEquivalent: "").target = self
         m.addItem(.separator())
         for line in ["🔊 \(controller.outputName.isEmpty ? "-" : controller.outputName)", "🎤 \(controller.inputName.isEmpty ? "-" : controller.inputName)", "💰 \(controller.usageLine.isEmpty ? "-" : controller.usageLine)"] {
@@ -113,6 +114,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleTalk() { showOverlay(true); controller.toggle() }
     @objc private func showWindow() { showPanel(true) }
+    @objc private func toggleMic() { controller.toggleMic() }
     @objc private func toggleEar() { controller.toggleEar() }
     @objc private func openLog() { NSWorkspace.shared.open(URL(fileURLWithPath: NSHomeDirectory() + "/logs/friday.log")) }
 }

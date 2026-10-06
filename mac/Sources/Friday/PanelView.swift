@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// หน้าต่างลอยเล็กๆ ตอนคุย: วงกลม (สถานะ) + ข้อความถอดเสียง + ปุ่มยืนยันงานเสี่ยง
@@ -16,6 +17,8 @@ struct PanelView: View {
                     Text(status).font(.system(size: 13))
                 }
                 Spacer()
+                Button { NSApp.terminate(nil) } label: { Label("ปิด Friday", systemImage: "power") }
+                    .help("ปิด Friday ทั้งแอป (⌘Q)")
             }
             ScrollViewReader { proxy in
                 ScrollView {

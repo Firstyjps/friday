@@ -11,7 +11,8 @@ let package = Package(
         .executable(name: "Friday", targets: ["Launcher"]),
     ],
     targets: [
-        .target(name: "FridayCore", path: "Sources/Friday"),
+        .target(name: "ObjCTry", path: "Sources/ObjCTry"),   // ดัก NSException จาก AVAudioEngine (Swift จับไม่ได้)
+        .target(name: "FridayCore", dependencies: ["ObjCTry"], path: "Sources/Friday"),
         .executableTarget(name: "Launcher", path: "Sources/Launcher"),
     ]
 )

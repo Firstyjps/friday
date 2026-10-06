@@ -84,6 +84,11 @@ final class LiveSession: NSObject, URLSessionWebSocketDelegate {
         send(["realtimeInput": ["audio": ["data": pcm16k.base64EncodedString(), "mimeType": "audio/pcm;rate=16000"]]])
     }
 
+    /// ไมค์ถูกปิดชั่วคราว → บอก Gemini ว่าเสียงหยุด (VAD จะไม่รอประโยคที่ค้าง) · ส่งเสียงใหม่เมื่อไหร่ก็เปิด stream ต่อเอง
+    func sendAudioStreamEnd() {
+        send(["realtimeInput": ["audioStreamEnd": true]])
+    }
+
     func sendText(_ text: String) {
         send(["realtimeInput": ["text": text]])
     }

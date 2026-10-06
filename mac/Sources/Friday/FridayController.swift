@@ -20,6 +20,7 @@ final class FridayController: ObservableObject {
     @Published var speaking = false
     @Published var messages: [Message] = []
     @Published var earMuted = false
+    @Published var micMuted = false               // ปิดไมค์ชั่วคราวระหว่างคุย (session ยังอยู่ Friday ยังพูด/ทำงานต่อ แต่ไม่ได้ยินผู้ใช้)
     @Published var inputName = ""
     @Published var outputName = ""
 
@@ -156,7 +157,9 @@ final class FridayController: ObservableObject {
                 if self.speaking || !self.confirms.isEmpty || !self.pendingResults.isEmpty || self.activeJobs > 0 {
                     self.lastActivity = Date(); return
                 }
-                if Date().timeIntervalSince(self.lastActivity) * 1000 > (self.config?.idleMs ?? 20000) {
+                // ปิดไมค์อยู่ = ผู้ใช้ตั้งใจพักคุย (เช่น คุยกับคนอื่น) → รอนานกว่า แต่ไม่เกิน 3 นาที
+                let idleLimitMs = self.micMuted ? 180_000 : (self.config?.idleMs ?? 20000)
+                if Date().timeIntervalSince(self.lastActivity) * 1000 > idleLimitMs {
                     self.sys("💤 พักก่อน — เรียก \"Friday\" เมื่อต้องการ")
                     self.endSession()
                 }
@@ -168,12 +171,13 @@ final class FridayController: ObservableObject {
     private func onMic(_ chunk: Data) {
         switch phase {
         case .live:
+            if micMuted { micLevel = 0; return }
             // ไม่มีตัวตัดเสียงสะท้อน (เช่น เสียงออกลำโพงจอ + ไมค์หูฟัง) → ไมค์จะได้ยิน Friday แล้ววนลูปคุยกับตัวเอง
             // จึงไม่ส่งเสียงไมค์ระหว่าง Friday พูด + ช่วงหางเสียง 0.8 วิ (แลกกับการพูดแทรกไม่ได้ในโหมดนี้)
             if !audio.aecEnabled && (speaking || Date().timeIntervalSince(speakEndedAt) < 0.8) { micLevel = 0; return }
             micLevel = WakeDetector.rms(chunk)
             live?.sendAudio(chunk)
-        case .connecting: connectQueue.append(chunk)
+        case .connecting: if !micMuted { connectQueue.append(chunk) }
         case .sleeping: if !earMuted { wakeListen(chunk) }
         default: break
         }
@@ -291,6 +295,7 @@ final class FridayController: ObservableObject {
             Task { await ServerAPI.reportUsage(u); usageLine = await ServerAPI.usageLine() ?? usageLine; onPhaseChanged?(phase) }
         }
         sessionStart = nil
+        micMuted = false
         ending = false; userTurn = ""
         lastFri = ""; micLevel = 0; outLevel = 0; confirms = [:]; pendingConfirm = nil; muteAfterEnd = false
         live?.close(); live = nil
@@ -535,6 +540,16 @@ final class FridayController: ObservableObject {
     private func setPhase(_ p: Phase) {
         phase = p
         onPhaseChanged?(p)
+    }
+
+    /// ปุ่มไมค์บน overlay / เมนู: ปิด-เปิดไมค์ชั่วคราวระหว่างคุย (ต่างจาก "ปิดหู" ที่จบ session และปล่อยไมค์)
+    func toggleMic() {
+        guard phase == .live || phase == .connecting else { return }
+        micMuted.toggle()
+        micLevel = 0; lastActivity = Date()
+        if micMuted { connectQueue = []; live?.sendAudioStreamEnd() }
+        Log.write("mic: \(micMuted ? "ปิดไมค์ชั่วคราว" : "เปิดไมค์คืน")")
+        onPhaseChanged?(phase)
     }
 
     func toggleEar() { setEarMuted(!earMuted) }

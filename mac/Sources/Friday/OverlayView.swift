@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Island overlay (ทิศทาง B): แถบเล็กกลางขอบบนจอตอนปลุก → ขยายเป็นการ์ดเมื่อ Friday พูด/มีงาน → การ์ดยืนยันเมื่อต้องถาม
@@ -44,7 +45,9 @@ struct OverlayView: View {
         HStack(spacing: 10) {
             orb(22)
             bars(count: 4, level: c.speaking ? c.outLevel : c.micLevel, height: 16)
-            Text(status).font(.system(size: 13)).foregroundStyle(.white)
+            Text(status).font(.system(size: 13)).foregroundStyle(c.micMuted && !c.speaking ? warn : .white)
+            micButton
+            quitButton
         }
     }
 
@@ -54,8 +57,11 @@ struct OverlayView: View {
             HStack(spacing: 10) {
                 orb(22)
                 Text("Friday").font(.system(size: 12)).foregroundStyle(dim)
+                if c.micMuted { Text("ปิดไมค์อยู่").font(.system(size: 11, weight: .medium)).foregroundStyle(warn) }
                 Spacer()
                 elapsed(since: c.sessionStartPublic)
+                micButton
+                quitButton
             }
             if !c.lastFri.isEmpty {
                 Text(c.lastFri).font(.system(size: 13)).foregroundStyle(.white).lineLimit(3).fixedSize(horizontal: false, vertical: true)
@@ -109,10 +115,36 @@ struct OverlayView: View {
     }
 
     // ---------- ชิ้นส่วน ----------
+    /// ปุ่มปิด/เปิดไมค์ชั่วคราว — ปิดอยู่ = พื้นเหลือง ไอคอนขีดฆ่า
+    private var micButton: some View {
+        Button { c.toggleMic() } label: {
+            Image(systemName: c.micMuted ? "mic.slash.fill" : "mic.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(c.micMuted ? ink : .white)
+                .frame(width: 26, height: 26)
+                .background(c.micMuted ? warn : Color.white.opacity(0.1), in: Circle())
+        }
+        .buttonStyle(.plain)
+        .help(c.micMuted ? "เปิดไมค์" : "ปิดไมค์ชั่วคราว")
+    }
+
+    /// ปุ่มปิด Friday ทั้งแอป (เหมือนเมนู "ปิด Friday" / ⌘Q) — ปล่อยไมค์ + ปิดหูสำรองของ server
+    private var quitButton: some View {
+        Button { NSApp.terminate(nil) } label: {
+            Image(systemName: "power")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(.white.opacity(0.8))
+                .frame(width: 26, height: 26)
+                .background(Color.white.opacity(0.1), in: Circle())
+        }
+        .buttonStyle(.plain)
+        .help("ปิด Friday")
+    }
+
     private var status: String {
         switch c.phase {
         case .connecting: return "กำลังเชื่อมต่อ…"
-        case .live: return c.speaking ? "กำลังพูด…" : "ฟังอยู่…"
+        case .live: return c.speaking ? "กำลังพูด…" : c.micMuted ? "ปิดไมค์อยู่ — Friday ไม่ได้ยิน" : "ฟังอยู่…"
         case .sleeping: return "พักแล้ว"
         default: return ""
         }

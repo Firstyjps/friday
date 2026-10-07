@@ -98,7 +98,7 @@
         },
         {
           "name": "get_usage",
-          "description": "ดูว่าเดือนนี้คุยกับ Friday ไปกี่นาที เสียค่า Gemini ไปประมาณเท่าไหร่",
+          "description": "ดูว่าเดือนนี้เลขาส่วนตัว ไปกี่นาที เสียค่า Gemini ไปประมาณเท่าไหร่",
           "parameters": {
             "type": "OBJECT",
             "properties": {}
@@ -159,6 +159,22 @@
             "type": "OBJECT",
             "properties": {}
           }
+        },
+        {
+          "name": "announce_homepod",
+          "description": "พูดข้อความออกลำโพง HomePod mini ในห้องนอน (ภาษาไทย) — ใช้เมื่อผู้ใช้สั่งให้ประกาศ/บอกคนในห้อง หรือขอให้เตือนทางลำโพง",
+          "parameters": {
+            "type": "OBJECT",
+            "properties": {
+              "text": {
+                "type": "STRING",
+                "description": "ข้อความที่จะพูด สั้นๆ"
+              }
+            },
+            "required": [
+              "text"
+            ]
+          }
         }
       ]
     }
@@ -204,7 +220,8 @@
     "run_shortcut",
     "open_app",
     "open_url",
-    "system_info"
+    "system_info",
+    "announce_homepod"
   ],
   "shortcutsAllowed": [
     "เปิดไฟ",
@@ -221,7 +238,8 @@
     "remember",
     "run_shortcut",
     "open_app",
-    "open_url"
+    "open_url",
+    "announce_homepod"
   ],
   "_actionToolsNote": "เครื่องมือที่ลงมือทำ — แอป/เว็บจะยอมเรียกก็ต่อเมื่อผู้ใช้พูดหลังข้อความล่าสุดที่เราส่งให้ Gemini (กัน prompt injection)",
   "_googleSearchNote": "ลอง {\"googleSearch\": {}} ใน tools แล้ว (12 ก.ย. 2026) → Gemini ปิด session ทันที 'You exceeded your current quota' — คีย์นี้ไม่มี quota grounding บน Live · ถ้าเปิด billing grounding แล้วค่อยใส่กลับ",
@@ -242,5 +260,11 @@
     "*funding-executor*",
     "*katana*",
     "*executor*"
-  ]
+  ],
+  "homepod": {
+    "id": "42:60:41:F8:8C:8C",
+    "voice": "Kanya"
+  },
+  "_homepodNote": "HomePod mini \"Main Bedroom\" — พูดออกผ่าน AirPlay (pyatv atvremote, ~/Library/Python/3.13/bin) · /api/ask = Shortcut \"เลขาส่วนตัว\" บน iPhone/HomePod ใช้ textModel",
+  "textModel": "gemini-3.1-flash-lite"
 }

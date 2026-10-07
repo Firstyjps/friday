@@ -19,7 +19,9 @@ LaunchAgent `com.kron.friday-room` เปิด Friday.app ตอน login
 - พูด **"Friday"** (หรือ "Friday เปิด Chrome ให้หน่อย" รวดเดียว) → ติ๊ง → คุย · เงียบ 20 วิ → กลับไปรอคำปลุก
 - **⌥⌘F** = เรียกคุยจากที่ไหนก็ได้ · ไอคอน menu bar = คุย/หยุด, ปิดไมค์ชั่วคราว, แสดงหน้าต่าง, ปิดหู, เปิด log
 - **ปุ่มไมค์บนแถบ Island** (ขวาสุด) = ปิดไมค์ชั่วคราวระหว่างคุย — Friday ไม่ได้ยินเรา แต่ยังพูด/ทำงานค้างต่อได้ (ปุ่มเหลือง = ปิดอยู่) · ปิดไมค์ค้างเกิน 3 นาที → จบ session เอง · ต่างจาก "ปิดหู" ที่จบ session และปล่อยไมค์ทั้งหมด
-- iPhone: **"หวัดดี Siri Friday"** (Shortcut แยกตามอุปกรณ์: Mac → `friday://room`, iPhone → เว็บ)
+- **HomePod mini**: **"หวัดดี Siri เลขาส่วนตัว"** → Siri ถาม "ถามอะไร Friday คะ" → พูดคำถาม → Siri อ่านคำตอบ (Shortcut `shortcuts/เลขาส่วนตัว.shortcut` → `POST /api/ask` ผ่าน Tailscale · Gemini text `textModel` + tools ชุดเดียวกับ Friday) · งานเสี่ยงตอบ "เลขาส่วนตัว ยืนยัน/ยกเลิก" · งานนาน → ตอบ "กำลังทำ" แล้วพูดผลออก HomePod เอง
+- **พูดออก HomePod**: tool `announce_homepod` / `POST /api/announce {text}` → `say -v Kanya` → AirPlay (pyatv `atvremote`, `config.json → homepod.id`)
+- iPhone: **"หวัดดี Siri Friday" (Shortcut แยกตามอุปกรณ์: Mac → `friday://room`, iPhone → เว็บ)
 - ถ้าปิด Friday.app ไป server ยังฟังคำปลุกสำรอง (ffmpeg) → ได้ยิน "Friday" แล้วเปิดแอปให้เอง
 
 ## ความจำ / Vault / ค่าใช้จ่าย

@@ -9,6 +9,7 @@ import { extname, join } from 'node:path';
 import { RISKY, READ_ONLY_TOOLS, HARD_DENY, SECRET_DENY, agentEnv, CONFIRM_MARK, WAKE, frameResult } from './lib/rules.mjs';
 import { AgentSession } from './lib/claude-agent.mjs';
 import { decide as policyDecide, secretCheck, ruleKey, RuleStore } from './lib/policy.mjs';
+import { speak as homepodSpeak, askText } from './lib/homepod.mjs';
 
 const PORT = Number(process.env.PORT || 4850);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -184,6 +185,7 @@ function createJob(convo, task, { forceConfirm = false } = {}) {
 function hold(job, reason, why) {
   job.status = 'needs_confirmation'; job.reason = reason;
   log(`JOB ${job.id} HOLD (${why}) | ${job.task}${why !== 'risky' ? ` | ${reason.slice(0, 200).replace(/\n/g, ' ')}` : ''}`);
+  if (job.announce && job.answered) { homepodPending = job.id; announce(`งานนี้ต้องยืนยันก่อนค่ะ ${reason.slice(0, 150)} ถ้าจะให้ทำ พูดว่า หวัดดี Siri เลขาส่วนตัว ยืนยัน`); }
   if (why === 'tool') return;    // งานกำลังรันอยู่ใน agent — หมดเวลาแล้ว permission timeout จะ deny ให้เอง
   setTimeout(() => { if (job.status === 'needs_confirmation') { job.status = 'cancelled'; job.result = 'หมดเวลายืนยัน'; log(`JOB ${job.id} expired`); } }, 5 * 60e3);
 }
@@ -207,8 +209,23 @@ function startJob(job) {
     job.result = r.text || '(ไม่มีผลลัพธ์)';
     log(`JOB ${id} ${job.status} ${secs}s | ${job.result.slice(0, 300).replace(/\n/g, ' ')}`);
     telegram(`🎙️ Friday → Mac (${secs}s)\n${task}\n\n${job.result}`);
+    if (job.announce && job.answered) announce(job.status === 'done' ? job.result : `งานไม่สำเร็จค่ะ ${job.result}`);   // HomePod ตอบไปก่อนแล้วว่า "กำลังทำ" → บอกผลทางลำโพง
   });
   return job;
+}
+
+async function confirmJob(job, approve, remember = false) {
+  if (job.permResolve) {                       // งานรันอยู่ใน agent รอ allow/deny เครื่องมือ
+    job.status = 'running';
+    if (approve && remember && job.pendingTool) {   // "ยืนยันตลอด" → จำประเภทคำสั่ง/โฟลเดอร์นี้ ไม่ถามอีก
+      const k = ruleKey(job.pendingTool.tool, job.pendingTool.input);
+      if (k && await ruleStore.add(k)) log(`PERMISSION remember ${k}`);
+    }
+    if (approve) { job.confirmed = true; log(`JOB ${job.id} tool allowed`); job.permResolve(true); }
+    else { log(`JOB ${job.id} tool denied`); job.permResolve(false); }
+  }
+  else if (approve) { job.confirmed = true; startJob(job); }
+  else { job.status = 'cancelled'; job.result = 'ผู้ใช้ยกเลิก'; log(`JOB ${job.id} cancelled`); }
 }
 
 const view = (j) => ({ id: j.id, status: j.status, result: j.result, reason: j.reason, task: j.task });
@@ -463,6 +480,52 @@ const serverTools = {
   },
 };
 
+// ---------- HomePod: (C) พูดออกลำโพง · (B) "หวัดดี Siri เลขาส่วนตัว" ----------
+const loadCfg = async () => JSON.parse(await readText(join(PUBLIC, 'config.json')) || '{}');
+const announce = async (text) => homepodSpeak(text, (await loadCfg()).homepod, log);
+serverTools.announce_homepod = async ({ text }) => announce(text);
+let homepodPending = null;    // job ที่ HomePod ถามยืนยันค้างไว้ → "เลขาส่วนตัว ยืนยัน" ครั้งถัดไปจะยืนยันงานนี้
+const chatLog = (who, text) => appendFile(CHAT, `${new Date().toISOString().slice(0, 19)}Z | ${who} ${String(text).replace(/\n/g, ' ')}\n`).catch(() => {});
+
+async function homepodAsk(text) {
+  const cfg = await loadCfg();
+  chatLog('🧑🔊', text);
+  const pending = homepodPending && jobs.get(homepodPending);
+  if (pending?.status === 'needs_confirmation') {          // คำตอบยืนยัน/ยกเลิกงานที่ถามค้างไว้
+    const yes = new RegExp(cfg.affirm, 'i').test(text), no = new RegExp(cfg.negate, 'i').test(text);
+    if (yes !== no) {
+      homepodPending = null;
+      log(`HOMEPOD ${yes ? 'ยืนยัน' : 'ยกเลิก'} JOB ${pending.id}`);
+      await confirmJob(pending, yes);
+      await settle(pending);
+      return reply(pending.status === 'done' ? pending.result : pending.status === 'running' ? (pending.answered = true, 'ได้ค่ะ กำลังทำ เสร็จแล้วจะบอกทางลำโพงนะคะ')
+        : pending.status === 'cancelled' ? 'ยกเลิกแล้วค่ะ' : pending.result || 'งานไม่สำเร็จค่ะ');
+    }
+  }
+  const made = [];
+  const callTool = async (name, args) => {
+    if (name === 'run_on_mac') {
+      const job = createJob('homepod', String(args.task || text).slice(0, 4000));
+      job.announce = true; made.push(job);
+      await settle(job);
+      if (job.status === 'needs_confirmation') homepodPending = job.id;
+      if (job.status === 'running') job.reportedRunning = true;
+      return { ...view(job), result: job.result && frameResult('ผลจาก Mac', job.result) };
+    }
+    if (Object.hasOwn(serverTools, name) && (cfg.serverTools ?? []).includes(name)) return serverTools[name](args);
+    return { ok: false, result: `เครื่องมือ ${name} ใช้ผ่าน HomePod ไม่ได้` };
+  };
+  let answer;
+  try { answer = await askText(text, { key: KEY, model: cfg.textModel || 'gemini-3.1-flash-lite', cfg, context, callTool, log }); }
+  catch (e) { log(`HOMEPOD error ${e.message}`); answer = 'ขอโทษค่ะ ตอนนี้ Friday ตอบไม่ได้ ลองใหม่อีกครั้งนะคะ'; }
+  for (const j of made) {                      // จากนี้ผล/คำถามยืนยันที่มาทีหลัง → พูดออก HomePod
+    j.answered = true;
+    if (j.reportedRunning && (j.status === 'done' || j.status === 'error')) announce(j.result);   // เสร็จระหว่างที่ Gemini กำลังตอบ
+  }
+  return reply(answer);
+  function reply(a) { const t = String(a).replace(/[*#`_>|]/g, '').trim(); chatLog('🤖🔊', t); log(`HOMEPOD ask | ${text.slice(0, 100)} → ${t.slice(0, 150)}`); return { answer: t }; }
+}
+
 // ---------- HTTP ----------
 const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
 const readBody = (req) => new Promise((resolve, reject) => {
@@ -484,7 +547,7 @@ http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://x');
     if (url.pathname.startsWith('/api/')) {
-      if (!apiAllowed(req)) return json(res, 403, { error: 'forbidden' });
+      if (!apiAllowed(req)) { if (url.pathname === '/api/ask') log(`HOMEPOD 403 | x-friday=${req.headers['x-friday']} origin=${req.headers.origin} ts=${req.headers['tailscale-user-login']}`); return json(res, 403, { error: 'forbidden' }); }
       if (req.method === 'POST' && url.pathname === '/api/bye') { roomSeenAt = 0; log('room: หน้าต่างปิด → หูเบื้องหลังฟังแทน'); return json(res, 200, { ok: true }); }
       if (req.method === 'POST' && url.pathname === '/api/app-quit') { roomSeenAt = 0; earControl?.stop(); return json(res, 200, { ok: true }); }
       if (req.method === 'POST' && url.pathname === '/api/room-hello') {
@@ -511,6 +574,16 @@ http.createServer(async (req, res) => {
         if (r.wake) log(`WAKE | ${r.phrase}`);
         return json(res, 200, r);
       }
+      if (req.method === 'POST' && url.pathname === '/api/ask') {          // Siri Shortcut "เลขาส่วนตัว" (HomePod/iPhone)
+        const { text } = await readBody(req);
+        log(`HOMEPOD request | ua=${String(req.headers['user-agent']).slice(0, 60)} | ${typeof text === 'string' ? text.slice(0, 80) : JSON.stringify(text)}`);
+        if (!text || typeof text !== 'string') return json(res, 400, { error: 'text required' });
+        return json(res, 200, await homepodAsk(text.slice(0, 1000)));
+      }
+      if (req.method === 'POST' && url.pathname === '/api/announce') {     // ให้ระบบอื่นพูดออก HomePod
+        const { text } = await readBody(req);
+        return json(res, 200, await announce(text));
+      }
       if (req.method === 'POST' && url.pathname === '/api/mac') {
         const { task, convo, confirm } = await readBody(req);    // confirm=true: แอปไม่ได้ยินผู้ใช้สั่ง → กักไว้ถามก่อน
         if (!task || typeof task !== 'string') return json(res, 400, { error: 'task required' });
@@ -524,17 +597,7 @@ http.createServer(async (req, res) => {
         if (!job) return json(res, 404, { error: 'no such job' });
         if (job.status !== 'needs_confirmation') return json(res, 409, view(job));
         const { approve, remember } = await readBody(req);
-        if (job.permResolve) {                       // งานรันอยู่ใน agent รอ allow/deny เครื่องมือ
-          job.status = 'running';
-          if (approve === true && remember === true && job.pendingTool) {   // "ยืนยันตลอด" → จำประเภทคำสั่ง/โฟลเดอร์นี้ ไม่ถามอีก
-            const k = ruleKey(job.pendingTool.tool, job.pendingTool.input);
-            if (k && await ruleStore.add(k)) log(`PERMISSION remember ${k}`);
-          }
-          if (approve === true) { job.confirmed = true; log(`JOB ${job.id} tool allowed`); job.permResolve(true); }
-          else { log(`JOB ${job.id} tool denied`); job.permResolve(false); }
-        }
-        else if (approve === true) { job.confirmed = true; startJob(job); }
-        else { job.status = 'cancelled'; job.result = 'ผู้ใช้ยกเลิก'; log(`JOB ${job.id} cancelled`); }
+        await confirmJob(job, approve === true, remember === true);
         await settle(job);
         return json(res, 200, view(job));
       }

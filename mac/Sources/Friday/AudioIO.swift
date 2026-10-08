@@ -26,6 +26,7 @@ final class AudioIO {
     private(set) var outputName = "?"
     /// voice processing (ตัดเสียงสะท้อน) ทำงานอยู่ไหม — ถ้าไม่ controller จะปิดไมค์ระหว่าง Friday พูด
     private(set) var aecEnabled = false
+    private(set) var outputAirPlay = false
     var isSpeaking: Bool { pending > 0 }
 
     private var inEngine = AVAudioEngine()
@@ -98,12 +99,13 @@ final class AudioIO {
         }
         guard let inOK else { throw NSError(domain: "Friday", code: 3, userInfo: [NSLocalizedDescriptionKey: "เปิดไมค์ไม่ได้สักตัว"]) }
         aecEnabled = false
+        outputAirPlay = outOK.airplay
         started(out: outOK.name, inp: inOK.name)
     }
 
     private func started(out: String, inp: String) {
         outputName = out; inputName = inp
-        Log.write("audio: 🔊 \(out) · 🎤 \(inp) · aec=\(aecEnabled)")
+        Log.write("audio: 🔊 \(out) · 🎤 \(inp) · aec=\(aecEnabled) · airplay=\(outputAirPlay)")
         onDevicesChanged?()
     }
 
@@ -124,6 +126,7 @@ final class AudioIO {
         inEngine = e; outEngine = e; player = p; p.play()
         resetPlayback(); observe(e)
         aecEnabled = true
+        outputAirPlay = out.airplay
         started(out: out.name, inp: inp.name)
     }
 

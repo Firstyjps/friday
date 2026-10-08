@@ -173,8 +173,9 @@ final class FridayController: ObservableObject {
         case .live:
             if micMuted { micLevel = 0; return }
             // ไม่มีตัวตัดเสียงสะท้อน (เช่น เสียงออกลำโพงจอ + ไมค์หูฟัง) → ไมค์จะได้ยิน Friday แล้ววนลูปคุยกับตัวเอง
-            // จึงไม่ส่งเสียงไมค์ระหว่าง Friday พูด + ช่วงหางเสียง 0.8 วิ (แลกกับการพูดแทรกไม่ได้ในโหมดนี้)
-            if !audio.aecEnabled && (speaking || Date().timeIntervalSince(speakEndedAt) < 0.8) { micLevel = 0; return }
+            // จึงไม่ส่งเสียงไมค์ระหว่าง Friday พูด + ช่วงหางเสียง 0.8 วิ (AirPlay/HomePod เล่นช้า ~2 วิ → หางยาวขึ้น) แลกกับการพูดแทรกไม่ได้
+            let tail = audio.outputAirPlay ? (config?.airplayEchoTailSec ?? 2.5) : 0.8
+            if (!audio.aecEnabled || audio.outputAirPlay) && (speaking || Date().timeIntervalSince(speakEndedAt) < tail) { micLevel = 0; return }
             micLevel = WakeDetector.rms(chunk)
             live?.sendAudio(chunk)
         case .connecting: if !micMuted { connectQueue.append(chunk) }

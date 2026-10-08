@@ -23,6 +23,7 @@ enum ServerAPI {
         let tools: JSONValue
         var outputPriority: [String]? = nil
         var inputPriority: [String]? = nil
+        var airplayEchoTailSec: Double? = nil   // ลำโพง AirPlay (HomePod) ดีเลย์ → ปิดไมค์หลัง Friday พูดจบนานขึ้น
         var farewell: String? = nil
         var stopWords: String? = nil
         var speechConfig: JSONValue? = nil

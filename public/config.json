@@ -179,7 +179,8 @@
       ]
     }
   ],
-  "outputPriority": [
+  "airplayEchoTailSec": 2.5,
+  "outputPriority": ["Main Bedroom", "HomePod", "AirPlay", 
     "PG32UCDM",
     "Jabra",
     "PowerConf",
@@ -188,7 +189,7 @@
     "External Headphones",
     "MacBook Air Speakers"
   ],
-  "inputPriority": [
+  "inputPriority": ["External Microphone", 
     "Jabra",
     "PowerConf",
     "Luna",

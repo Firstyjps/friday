@@ -11,6 +11,7 @@ struct AudioDevice: Equatable {
     let sampleRate: Double
     let alive: Bool
     let virtual: Bool
+    let airplay: Bool      // HomePod/AirPlay — เสียงออกช้า ~2 วิ
 
     var usableOutput: Bool { alive && outputChannels > 0 && sampleRate > 0 }
     var usableInput: Bool { alive && inputChannels > 0 && sampleRate > 0 }
@@ -27,7 +28,8 @@ enum AudioDevices {
             AudioDevice(id: id, name: name(id), inputChannels: channels(id, kAudioObjectPropertyScopeInput),
                         outputChannels: channels(id, kAudioObjectPropertyScopeOutput), sampleRate: rate(id),
                         alive: u32(id, kAudioDevicePropertyDeviceIsAlive) != 0,
-                        virtual: u32(id, kAudioDevicePropertyTransportType) == kAudioDeviceTransportTypeVirtual)
+                        virtual: u32(id, kAudioDevicePropertyTransportType) == kAudioDeviceTransportTypeVirtual,
+                        airplay: u32(id, kAudioDevicePropertyTransportType) == kAudioDeviceTransportTypeAirPlay)
         }
     }
 

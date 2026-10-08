@@ -565,6 +565,7 @@ const readBody = (req) => new Promise((resolve, reject) => {
   let b = ''; req.on('data', (d) => { b += d; if (b.length > 1e5) req.destroy(); });
   req.on('end', () => { try { resolve(b ? JSON.parse(b) : {}); } catch (e) { reject(e); } }); req.on('error', reject);
 });
+const DEBUG_PING = process.env.FRIDAY_DEBUG_PING === "1";
 const TS_USER = process.env.TAILSCALE_USER || '';   // บัญชี Tailscale ของผู้ใช้ (ใน .env) — request ผ่าน tailscale serve ต้องมาจากบัญชีนี้เท่านั้น
 function apiAllowed(req) {
   // ต้องมี header เฉพาะ (เว็บอื่นส่งข้าม origin ไม่ได้ถ้าไม่ผ่าน preflight) + Origin ต้องอยู่ใน allowlist
@@ -600,11 +601,14 @@ http.createServer(async (req, res) => {
       const t = url.pathname.match(/^\/api\/tool\/(\w+)$/);
       if (req.method === 'POST' && t && Object.hasOwn(serverTools, t[1])) return json(res, 200, await serverTools[t[1]](await readBody(req)));
       if (req.method === 'POST' && url.pathname === '/api/ping') {   // heartbeat จากหน้าโหมดห้อง (debug)
-        const b = await readBody(req); roomSeenAt = Date.now(); if (b.track !== "live" || b.ctx !== "running" ) log(`ping | ${JSON.stringify(b)}`); return json(res, 200, { ok: true });
+        const b = await readBody(req); roomSeenAt = Date.now(); if (b.track !== "live" || b.ctx !== "running" || +b.frames === 0 || b.muted || DEBUG_PING) log(`ping | ${JSON.stringify(b)}`); return json(res, 200, { ok: true });
       }
       if (req.method === 'POST' && url.pathname === '/api/wake') {
         const r = await detectWake(await readRaw(req));
         if (r.wake) log(`WAKE | ${r.phrase}`); else log(`wake check: no (${r.text.length} chars)`);   // ไม่ log ข้อความ (privacy)
+        // โหมดหาสาเหตุชั่วคราว (user อนุญาต): ไฟล์ data/wake-debug-until มี timestamp → เก็บแค่ 12 ตัวอักษรแรก แยกไฟล์ ลบหลังวิเคราะห์
+        const until = +(await readText(join(DATA, 'wake-debug-until'))) || 0;
+        if (Date.now() < until) appendFile(join(HOME, 'logs', 'friday-wake-debug.log'), `${new Date().toISOString().slice(11, 19)} | ${r.wake ? 'WAKE' : 'no  '} | ${r.text.slice(0, 12)}\n`).catch(() => {});
         return json(res, 200, r);
       }
       if (req.method === 'POST' && url.pathname === '/api/tts') {          // แอป Mac: ข้อความที่ Gemini ตอบ → เสียง ElevenLabs (PCM16 24k)

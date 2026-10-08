@@ -264,12 +264,11 @@
   ],
   "engine": "cascade",
   "cascade": {
-    "model": "gemini-3.5-flash-lite",
-    "thinkingLevel": "minimal",
+    "model": "gemini-3.1-flash-lite",
+    "thinkingBudget": 0,
     "ttsModel": "gemini-3.8-flash-lite-tts",
     "voice": "Despina",
-    "filler": false,
-    "fillerText": "แป๊บนึงนะคะ"
+    "filler": "auto"
   },
   "_engineNote": "engine: live = Gemini Live (เสียงตรง) · cascade = ฟังเสียง→gemini text→Gemini TTS (lib/cascade.mjs, /api/turn) แอป Mac เท่านั้น",
   "tts": {

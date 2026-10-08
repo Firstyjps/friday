@@ -11,7 +11,7 @@ import { AgentSession } from './lib/claude-agent.mjs';
 import { decide as policyDecide, secretCheck, ruleKey, RuleStore } from './lib/policy.mjs';
 import { speak as homepodSpeak, askText } from './lib/homepod.mjs';
 import { synth, ttsEnabled } from './lib/tts.mjs';
-import { Cascade, FILLERS } from './lib/cascade.mjs';
+import { Cascade } from './lib/cascade.mjs';
 
 const PORT = Number(process.env.PORT || 4850);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -555,9 +555,9 @@ async function scribe(wav) {          // ถอดเสียงผู้ใช
   return (await r.json()).text ?? '';
 }
 const recordUsage = (row) => mkdir(DATA, { recursive: true }).then(() => appendFile(USAGE, JSON.stringify({ date: today(), at: new Date().toLocaleTimeString('sv-SE', { timeZone: 'Asia/Bangkok' }), ...row }) + '\n')).catch(() => {});
-const cascade = new Cascade({ key: KEY, log, wav16k: pcmToWav, scribe, record: recordUsage });
+const cascade = new Cascade({ key: KEY, log, wav16k: pcmToWav, scribe, record: recordUsage, cacheDir: join(DATA, 'filler-cache') });
 // ทำเสียงประโยคแทรก (กำลังเช็คให้ค่ะ/สักครู่นะคะ/ได้เลยค่ะ) เก็บไว้ตั้งแต่เปิด server → ใช้ครั้งแรกก็ออกทันที
-loadCfg().then((cfg) => { if (cfg.engine === 'cascade' && cfg.cascade?.filler !== false) for (const t of FILLERS) cascade.filler(cfg, t).catch(() => {}); });
+loadCfg().then((cfg) => { if (cfg.engine === 'cascade' && cfg.cascade?.filler !== false) cascade.warm(cfg); });
 const turnTails = new Map();          // session → promise (ทีละรอบ)
 
 // ---------- HTTP ----------

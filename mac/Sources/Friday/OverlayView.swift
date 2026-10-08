@@ -130,7 +130,7 @@ struct OverlayView: View {
 
     /// ปุ่มปิด Friday ทั้งแอป (เหมือนเมนู "ปิด Friday" / ⌘Q) — ปล่อยไมค์ + ปิดหูสำรองของ server
     private var quitButton: some View {
-        Button { NSApp.terminate(nil) } label: {
+        Button { Log.write("quit: กดปุ่ม ⏻ บนแถบ Friday"); NSApp.terminate(nil) } label: {
             Image(systemName: "power")
                 .font(.system(size: 11, weight: .bold))
                 .foregroundStyle(.white.opacity(0.8))

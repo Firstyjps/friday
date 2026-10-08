@@ -124,7 +124,7 @@ final class AudioIO {
             try installTap(e)
             e.prepare(); try e.start()
         } catch { e.stop(); e.inputNode.removeTap(onBus: 0); throw error }
-        inEngine = e; outEngine = e; player = p; p.play()
+        inEngine = e; outEngine = e; player = p; safePlay()
         resetPlayback(); observe(e)
         aecEnabled = true
         outputAirPlay = out.airplay
@@ -141,7 +141,7 @@ final class AudioIO {
             e.connect(p, to: e.mainMixerNode, format: playFormat)
             e.prepare(); try e.start()
         } catch { e.stop(); throw error }
-        outEngine = e; player = p; p.play()
+        outEngine = e; player = p; safePlay()
         resetPlayback(); observe(e)
     }
 
@@ -318,20 +318,35 @@ final class AudioIO {
         guard outEngine.isRunning else { return }
         pending += 1
         let gen = generation
-        player.scheduleBuffer(buf) { [weak self] in
+        let p = player
+        let ok = objcTry { p.scheduleBuffer(buf) { [weak self] in
             DispatchQueue.main.async { if let self, gen == self.generation, self.pending > 0 { self.pending -= 1 } }
-        }
-        if !player.isPlaying { player.play() }
+        } }
+        if !ok { pending -= 1; return }
+        if !player.isPlaying { safePlay() }
     }
 
     private func resetPlayback() { generation += 1; pending = 0 }
+
+    /// ลำโพงหายกะทันหัน (HomePod/AirPlay หลุด) → AVAudioPlayerNode.play โยน NSException ทำแอปตาย (crash 8 ต.ค. 19:49)
+    /// ดักไว้ แล้วเลือกลำโพงใหม่แทน
+    private func safePlay() {
+        let p = player
+        if !objcTry({ p.play() }) { Log.write("audio: เล่นเสียงไม่ได้ (ลำโพงหลุด) → เลือกลำโพงใหม่"); scheduleReselect() }
+    }
+    private func objcTry(_ block: @escaping () -> Void) -> Bool {
+        var err: NSError?
+        let ok = FridayObjCTry(block, &err)
+        if !ok { Log.write("audio: ObjC exception \(err?.localizedDescription ?? "")") }
+        return ok
+    }
 
     /// ผู้ใช้พูดแทรก → หยุดเสียงที่ค้างในคิวทันที
     func flush() {
         generation += 1
         player.stop()
         pending = 0
-        if outEngine.isRunning { player.play() }
+        if outEngine.isRunning { safePlay() }
     }
 
     /// เสียงติ๊งตอนได้ยินคำปลุก

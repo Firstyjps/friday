@@ -54,6 +54,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// ปิด Friday (เมนู / ⌘Q) → ปล่อยไมค์ + ปิดหูสำรองของ server ด้วย ไมค์จะไม่ถูกใช้เลยจนกว่าจะเปิดแอปใหม่
     func applicationWillTerminate(_ n: Notification) { controller.shutdown() }
+    @objc func quitFromMenu() { Log.write("quit: เมนู ปิด Friday / ⌘Q"); NSApp.terminate(nil) }
+    /// ปิดจากที่อื่น (ระบบ/logout/osascript) จะไม่มีบรรทัด quit: ก่อน "ปล่อยไมค์" — ไว้แยกสาเหตุแอปปิดเอง
 
     /// เปิดแอปซ้ำ (Spotlight / Dock / open -a Friday) → เรียกคุย
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { summon(); return false }
@@ -108,7 +110,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         m.addItem(withTitle: controller.earMuted ? "เปิดหู (ฟังคำปลุก)" : "ปิดหู (ไม่ฟังคำปลุก)", action: #selector(toggleEar), keyEquivalent: "").target = self
         m.addItem(withTitle: "เปิด log", action: #selector(openLog), keyEquivalent: "").target = self
         m.addItem(.separator())
-        m.addItem(withTitle: "ปิด Friday", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        m.addItem(withTitle: "ปิด Friday", action: #selector(AppDelegate.quitFromMenu), keyEquivalent: "q").target = self
         statusItem.menu = m
     }
 

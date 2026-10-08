@@ -32,6 +32,7 @@ enum ServerAPI {
         var serverTools: [String]? = nil
         var maxSessionSec: Double? = nil
         var actionTools: [String]? = nil     // เครื่องมือที่ลงมือทำ → ต้องตามหลังเสียงผู้ใช้
+        var engine: String? = nil            // live | cascade (CascadeSession)
     }
 
     enum APIError: LocalizedError {
@@ -129,6 +130,32 @@ enum ServerAPI {
     static func tts(_ text: String) async -> Data? {
         do { return try await request("/api/tts", method: "POST", json: ["text": text], timeout: 25) }
         catch { Log.write("tts: ผิดพลาด \(error)"); return nil }
+    }
+
+    // ---------- โหมด cascade ----------
+    static func cascadeOpen(session: String, extra: String) async throws {
+        _ = try await request("/api/cascade/open", method: "POST", json: ["session": session, "extra": extra])
+    }
+    static func cascadeClose(session: String) async {
+        _ = try? await request("/api/cascade/close", method: "POST", json: ["session": session])
+    }
+    /// หนึ่งรอบคุย → NDJSON stream (อ่านทีละบรรทัดด้วย .lines)
+    static func turn(session: String, audio: Data) async throws -> URLSession.AsyncBytes {
+        try await stream("/api/turn?session=\(session)", body: audio, type: "application/octet-stream")
+    }
+    static func turn(session: String, json: [String: Any]) async throws -> URLSession.AsyncBytes {
+        try await stream("/api/turn?session=\(session)", body: try JSONSerialization.data(withJSONObject: json), type: "application/json")
+    }
+    private static func stream(_ path: String, body: Data, type: String) async throws -> URLSession.AsyncBytes {
+        var req = URLRequest(url: URL(string: path, relativeTo: base)!, timeoutInterval: 60)
+        req.httpMethod = "POST"
+        req.setValue("1", forHTTPHeaderField: "X-Friday")
+        req.setValue(type, forHTTPHeaderField: "Content-Type")
+        req.httpBody = body
+        let (bytes, resp) = try await URLSession.shared.bytes(for: req)
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200..<300).contains(code) else { throw APIError.http(code, "turn") }
+        return bytes
     }
 
     static func tool(_ name: String, args: [String: Any]) async -> [String: Any] {

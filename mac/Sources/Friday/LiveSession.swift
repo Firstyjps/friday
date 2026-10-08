@@ -1,7 +1,7 @@
 import Foundation
 
 /// Gemini Live API ผ่าน WebSocket ตรง (โปรโตคอลเดียวกับ @google/genai: ephemeral token → BidiGenerateContentConstrained)
-final class LiveSession: NSObject, URLSessionWebSocketDelegate {
+class LiveSession: NSObject, URLSessionWebSocketDelegate {
     enum Event {
         case open
         case audio(Data)                  // PCM16 24kHz
@@ -22,7 +22,7 @@ final class LiveSession: NSObject, URLSessionWebSocketDelegate {
     private var closedReported = false
 
     /// token ที่ Gemini รายงาน (รวมทั้ง session) แยกตามชนิด → คิดค่าใช้จ่าย
-    private(set) var usage: [String: Int] = ["inText": 0, "inAudio": 0, "outText": 0, "outAudio": 0]
+    var usage: [String: Int] = ["inText": 0, "inAudio": 0, "outText": 0, "outAudio": 0]
     /// usageMetadata ดิบทุก message (ไว้เทียบสูตรค่าใช้จ่ายกับบิลจริง — ดูใน selftest)
     private(set) var usageLog: [String] = []
     /// handle สำหรับต่อ session เดิมหลัง goAway (Gemini ส่ง sessionResumptionUpdate มาให้เป็นระยะ)

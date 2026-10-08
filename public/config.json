@@ -262,7 +262,7 @@
     "*katana*",
     "*executor*"
   ],
-  "engine": "live",
+  "engine": "cascade",
   "cascade": {
     "model": "gemini-3.5-flash-lite",
     "thinkingLevel": "minimal",

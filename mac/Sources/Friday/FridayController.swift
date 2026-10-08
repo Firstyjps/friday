@@ -218,7 +218,8 @@ final class FridayController: ObservableObject {
         onWantsPanel?(true)
         Task {
             do {
-                async let tokenReq = ServerAPI.token()
+                let cascade = config.engine == "cascade"          // cascade ไม่ต้องใช้ token ของ Gemini Live
+                async let tokenReq = cascade ? "" : ServerAPI.token()
                 async let extraReq = ServerAPI.contextText()   // ความจำ + บทสนทนาล่าสุด (ขอพร้อมกับ token)
                 let token = try await tokenReq
                 let extra = await extraReq
@@ -226,7 +227,7 @@ final class FridayController: ObservableObject {
                 sessionStart = Date()
                 userSpoke = false; friSpoke = false
                 pendingGreeting = greet
-                attach(LiveSession(), token: token, extra: extra, resumeHandle: nil)
+                attach(cascade ? CascadeSession() : LiveSession(), token: token, extra: extra, resumeHandle: nil)
             } catch {
                 sys("⚠️ เชื่อมต่อไม่ได้: \(error.localizedDescription)")
                 endSession()

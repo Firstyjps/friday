@@ -226,7 +226,11 @@ final class FridayController: ObservableObject {
                 // ไม่มีตัวตัดเสียงสะท้อน (ลำโพงจอ + ไมค์หูฟัง): EchoGate รู้ว่ากำลังเล่นอะไร → แยกเสียงผู้ใช้ออกจากเสียง Friday ที่สะท้อนกลับ
                 // เสียงสะท้อนล้วน = ทิ้ง (เดิมทิ้งทั้งหมด + หาง 0.8 วิ ซึ่งสั้นไป เสียงสะท้อนหลุดเป็นประโยคเปล่า 9 ต.ค.)
                 audio.echo.heard(chunk)
-                if !barged && (voiceBusy || audio.echo.echoActive()) {
+                // พูดแทรกปิดไว้ (config.bargeIn): 9 ต.ค. ไมค์ได้ยิน Friday ดังเกือบเท่าเสียงที่ส่งออก (gain 0.82) → คิดว่า Friday เป็นผู้ใช้ แล้วคุยกับตัวเองวน
+                // → ปิดไมค์ระหว่าง Friday พูด + หางเสียงอย่างน้อย 0.8 วิ (ตามความหน่วงที่วัดได้) เหมือนเดิม · EchoGate ยังเรียนรู้ค่าไว้
+                if config?.bargeIn != true {
+                    if voiceBusy || Date().timeIntervalSince(speakEndedAt) < max(0.8, audio.echo.delay + 0.6) { micLevel = 0; return }
+                } else if !barged && (voiceBusy || audio.echo.echoActive()) {
                     bargeBuf.append(chunk); if bargeBuf.count > 6 { bargeBuf.removeFirst() }
                     guard audio.echo.isBargeIn(noise: wakeDetector.noiseFloor) else { micLevel = 0; return }
                     if voiceBusy { bargeIn() } else { barged = true }        // หางเสียงสะท้อน: ไม่มีอะไรต้องหยุด แค่ปล่อยไมค์ผ่าน

@@ -33,6 +33,7 @@ enum ServerAPI {
         var maxSessionSec: Double? = nil
         var actionTools: [String]? = nil     // เครื่องมือที่ลงมือทำ → ต้องตามหลังเสียงผู้ใช้
         var engine: String? = nil            // live | cascade (CascadeSession)
+        var bargeIn: Bool? = nil             // พูดแทรกด้วย EchoGate (ไม่มี voice processing) — ปิดไว้: ไมค์ได้ยิน Friday ดังเกือบเท่าต้นฉบับ แยกไม่ออก 9 ต.ค.
     }
 
     enum APIError: LocalizedError {

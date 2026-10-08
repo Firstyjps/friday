@@ -262,6 +262,17 @@ async function detectWake(pcm) {
   return { text, wake: !!m, phrase: m ? m[0].trim() : '' };
 }
 
+// ข้อความสดระหว่างผู้ใช้พูด (แอป Mac โหมด cascade) — whisper ในเครื่อง ~0.4 วิ/ประโยค ไว้โชว์บน overlay อย่างเดียว
+// ข้อความจริงที่ใช้คุย/เช็คคำยืนยันยังเป็น Scribe ตอนพูดจบเหมือนเดิม
+async function partialText(pcm) {
+  const form = new FormData();
+  form.append('file', new Blob([pcmToWav(pcm)], { type: 'audio/wav' }), 'clip.wav');
+  form.append('response_format', 'json');
+  form.append('prompt', 'Friday ฟรายเดย์');
+  const r = await fetch(WHISPER, { method: 'POST', body: form, signal: AbortSignal.timeout(4000) });
+  return ((await r.json()).text || '').replace(/\[[^\]]*\]|\([^)]*\)/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
 // ---------- หูเบื้องหลัง: ฟังคำปลุกตอนหน้าต่าง Friday ปิดอยู่ → เปิดหน้าต่างขึ้นมาเอง ----------
 // หน้าต่างโหมดห้องส่ง ping ทุก 15s → ถ้ายังมีชีวิต หน้าต่างฟังเอง หูนี้ไม่ทำอะไร
 const EAR = process.env.FRIDAY_EAR !== '0';
@@ -611,6 +622,10 @@ http.createServer(async (req, res) => {
         const until = +(await readText(join(DATA, 'wake-debug-until'))) || 0;
         if (Date.now() < until) appendFile(join(HOME, 'logs', 'friday-wake-debug.log'), `${new Date().toISOString().slice(11, 19)} | ${r.wake ? 'WAKE' : 'no  '} | ${r.text.slice(0, 12)}\n`).catch(() => {});
         return json(res, 200, r);
+      }
+      if (req.method === 'POST' && url.pathname === '/api/partial') {      // ไม่ log ข้อความ (privacy)
+        try { return json(res, 200, { text: await partialText(await readRaw(req)) }); }
+        catch { return json(res, 200, { text: '' }); }
       }
       if (req.method === 'POST' && url.pathname === '/api/tts') {          // แอป Mac: ข้อความที่ Gemini ตอบ → เสียง ElevenLabs (PCM16 24k)
         const { text } = await readBody(req);

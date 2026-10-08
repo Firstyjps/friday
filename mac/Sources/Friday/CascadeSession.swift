@@ -19,6 +19,11 @@ final class CascadeSession: LiveSession {
     private var seg: [Data] = [], preroll: [Data] = []
     private var voiced = 0, silent = 0
     private var firstSegment = true
+    // ---- ข้อความสดระหว่างพูด: ส่งช่วงที่พูดไปแล้วให้ whisper ในเครื่องถอดทุก ~0.5 วิ ----
+    private var segId = 0                          // ช่วงพูดปัจจุบัน (ทิ้งผลที่มาช้าของช่วงเก่า)
+    private var finalSeg = -1                      // ช่วงที่ได้ข้อความจริง (Scribe) แล้ว → ไม่เอาผลชั่วคราวทับ
+    private var partialBusy = false
+    private var partialAt = Date.distantPast
     private static let minSpeech = 400.0, prerollChunks = 3, endSilence = 7, maxChunks = 300, minVoiced = 3
 
     /// noise = ระดับเสียงพื้นหลังที่หูคำปลุกเรียนรู้มาแล้ว (เริ่ม 300 แบบเดิม → เกณฑ์ 900 สูงไป ประโยคต่อจากคำปลุกหาย 8 ต.ค.)
@@ -52,16 +57,17 @@ final class CascadeSession: LiveSession {
             preroll.append(pcm16k); if preroll.count > Self.prerollChunks { preroll.removeFirst() }
             return
         }
-        if seg.isEmpty { seg = preroll; preroll = [] }
+        if seg.isEmpty { seg = preroll; preroll = []; segId += 1 }
         seg.append(pcm16k)
         if isSpeech { voiced += 1; silent = 0 } else { silent += 1 }
+        if voiced >= Self.minVoiced, !partialBusy, Date().timeIntervalSince(partialAt) > 0.5 { partial(seg.reduce(Data(), +)) }
         // ช่วงแรกหลังคำปลุก: คนมักเว้นจังหวะหลัง "ฟรายเดย์" → รอเงียบนานขึ้น (1.3 วิ) จะได้รวมเป็นประโยคเดียว
         let endSilence = firstSegment && voiced < 15 ? 13 : Self.endSilence
         guard silent >= endSilence || seg.count >= Self.maxChunks else { return }
         firstSegment = false
         let clip = seg.reduce(Data(), +), enough = voiced >= Self.minVoiced
         resetVAD()
-        if enough { run(audio: clip) }
+        if enough { partial(clip); run(audio: clip) }      // ถอดทั้งช่วงอีกรอบ (เร็วกว่า Scribe) ให้ข้อความสดครบก่อนข้อความจริงมา
     }
 
     /// ปิดไมค์ชั่วคราว → ช่วงที่พูดค้างไว้ส่งไปเลยถ้ายาวพอ
@@ -96,11 +102,22 @@ final class CascadeSession: LiveSession {
     // ---------- หนึ่งรอบ ----------
     private func run(audio: Data) {
         Log.write("cascade: ส่งเสียง \(String(format: "%.1f", Double(audio.count) / 32000))s")
-        start { try await ServerAPI.turn(session: self.id, audio: audio) }
+        start(seg: segId) { try await ServerAPI.turn(session: self.id, audio: audio) }
+    }
+
+    private func partial(_ pcm: Data) {
+        partialBusy = true; partialAt = Date()
+        let sid = segId
+        Task { @MainActor [weak self] in
+            let t = await ServerAPI.partial(pcm: pcm)
+            guard let self else { return }
+            self.partialBusy = false
+            if !self.closed, sid == self.segId, sid > self.finalSeg, !t.isEmpty { self.onEvent?(.inputPartial(t)) }
+        }
     }
     private func run(json: [String: Any]) { start { try await ServerAPI.turn(session: self.id, json: json) } }
 
-    private func start(_ open: @escaping () async throws -> URLSession.AsyncBytes) {
+    private func start(seg: Int = -1, _ open: @escaping () async throws -> URLSession.AsyncBytes) {
         busy = true
         current = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -111,7 +128,7 @@ final class CascadeSession: LiveSession {
                     if self.closed { return }
                     guard let d = line.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { continue }
                     switch o["t"] as? String {
-                    case "user": if let t = o["text"] as? String { self.onEvent?(.inputText(t)) }
+                    case "user": if let t = o["text"] as? String { self.finalSeg = max(self.finalSeg, seg); self.onEvent?(.inputText(t)) }
                     case "text": if let t = o["text"] as? String { self.onEvent?(.outputText(t)) }
                     case "audio": if let b = o["b64"] as? String, let a = Data(base64Encoded: b) { self.onEvent?(.audio(a)) }
                     case "tool":

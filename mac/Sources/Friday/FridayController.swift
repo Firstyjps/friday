@@ -418,6 +418,9 @@ final class FridayController: ObservableObject {
             for k in confirms.keys where confirms[k]!.armed {      // เก็บเฉพาะ turn ล่าสุดของผู้ใช้ หลังจาก Friday ถามยืนยันแล้ว
                 confirms[k]!.heard = (newTurn ? "" : confirms[k]!.heard) + t
             }
+        case .inputPartial(let t):
+            // โชว์บน overlay อย่างเดียว — ไม่แตะ userTurn/userSpoke/คำยืนยัน (ด่านความปลอดภัยใช้ข้อความจริงจาก Scribe)
+            if meIndex == nil, friIndex == nil, !speaking { lastMe = t; lastFri = ""; resultLine = "" }
         case .outputText(let t):
             if muteAfterEnd { Log.write("ev: drop text after end: \(t.prefix(30))"); return }
             if friIndex == nil { Log.write("ev: fri-start (prev fri=\(friTurn.count) chars)") }

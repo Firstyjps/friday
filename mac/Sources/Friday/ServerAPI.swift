@@ -93,6 +93,13 @@ enum ServerAPI {
         return (obj?["wake"] as? Bool ?? false, obj?["text"] as? String ?? "")
     }
 
+    /// ข้อความสดระหว่างผู้ใช้พูด (whisper ในเครื่อง) — ไว้โชว์อย่างเดียว
+    static func partial(pcm: Data) async -> String {
+        guard let d = try? await request("/api/partial", method: "POST", raw: pcm, timeout: 5),
+              let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return "" }
+        return obj["text"] as? String ?? ""
+    }
+
     /// บอก server ว่าแอปยังฟังอยู่ (หูเบื้องหลังของ server จะได้ไม่ปลุกซ้ำ) · wake=true ถ้าแอปถูกเปิดเพราะหูเบื้องหลังได้ยินคำปลุก
     static func hello() async -> Bool {
         guard let data = try? await request("/api/room-hello", method: "POST", json: [:]),

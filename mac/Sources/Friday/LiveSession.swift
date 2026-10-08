@@ -6,6 +6,7 @@ class LiveSession: NSObject, URLSessionWebSocketDelegate {
         case open
         case audio(Data)                  // PCM16 24kHz
         case inputText(String)            // ถอดเสียงผู้ใช้
+        case inputPartial(String)         // ข้อความชั่วคราวระหว่างผู้ใช้ยังพูด (cascade) — โชว์บน overlay อย่างเดียว ไม่ใช้เช็คคำสั่ง/คำยืนยัน
         case outputText(String)           // ถอดเสียง Friday
         case interrupted
         case turnComplete

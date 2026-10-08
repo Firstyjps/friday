@@ -422,7 +422,9 @@ final class FridayController: ObservableObject {
             else if name == "end_conversation" || name == "stop_listening" {
                 live?.sendToolResponse(id: id, name: name, response: ["status": "ok", "note": "ปิดแล้ว ไม่ต้องพูดอะไรเพิ่ม"])
                 muteAfterEnd = true                                  // ที่พูดไปก่อนเรียก tool ยังเล่นจนจบ ส่วนที่มาหลังจากนี้ทิ้ง
-                endAfterSpeech(mute: name == "stop_listening")
+                // ปิดหู (ไม่ฟังคำปลุกอีก) เฉพาะเมื่อผู้ใช้พูดสั่งเองใน session นี้ — ไม่งั้น Gemini เผลอเรียกเองแล้ว Friday หูหนวกเงียบๆ (8 ต.ค.)
+                if name == "stop_listening" && !userSpoke { Log.write("ev: stop_listening โดยไม่มีเสียงผู้ใช้ → จบ session แต่ไม่ปิดหู") }
+                endAfterSpeech(mute: name == "stop_listening" && userSpoke)
             }
             else if name == "confirm_task" {
                 let approve = (args["approve"] as? Bool) ?? ((args["approve"] as? String)?.lowercased() == "true")

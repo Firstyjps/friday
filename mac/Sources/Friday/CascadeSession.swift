@@ -18,6 +18,7 @@ final class CascadeSession: LiveSession {
     private var noiseFloor: Double
     private var seg: [Data] = [], preroll: [Data] = []
     private var voiced = 0, silent = 0
+    private var firstSegment = true
     private static let minSpeech = 400.0, prerollChunks = 3, endSilence = 7, maxChunks = 300, minVoiced = 3
 
     /// noise = ระดับเสียงพื้นหลังที่หูคำปลุกเรียนรู้มาแล้ว (เริ่ม 300 แบบเดิม → เกณฑ์ 900 สูงไป ประโยคต่อจากคำปลุกหาย 8 ต.ค.)
@@ -54,7 +55,10 @@ final class CascadeSession: LiveSession {
         if seg.isEmpty { seg = preroll; preroll = [] }
         seg.append(pcm16k)
         if isSpeech { voiced += 1; silent = 0 } else { silent += 1 }
-        guard silent >= Self.endSilence || seg.count >= Self.maxChunks else { return }
+        // ช่วงแรกหลังคำปลุก: คนมักเว้นจังหวะหลัง "ฟรายเดย์" → รอเงียบนานขึ้น (1.3 วิ) จะได้รวมเป็นประโยคเดียว
+        let endSilence = firstSegment && voiced < 15 ? 13 : Self.endSilence
+        guard silent >= endSilence || seg.count >= Self.maxChunks else { return }
+        firstSegment = false
         let clip = seg.reduce(Data(), +), enough = voiced >= Self.minVoiced
         resetVAD()
         if enough { run(audio: clip) }

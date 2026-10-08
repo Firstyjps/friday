@@ -71,6 +71,7 @@ final class FridayController: ObservableObject {
     // คำปลุก: VAD อยู่ใน WakeDetector (struct ล้วน) — ที่นี่แค่ส่ง clip ไป whisper
     private var wakeDetector = WakeDetector()
     private var checking = false
+    private var postWake: [Data] = []             // เสียงที่พูดต่อระหว่างรอ whisper เช็คคำปลุก (เดิมหาย → ต้องพูดซ้ำ 8 ต.ค.)
 
     // ---------- เริ่มต้น ----------
     private var activity: NSObjectProtocol?
@@ -192,17 +193,18 @@ final class FridayController: ObservableObject {
     }
 
     private func wakeListen(_ chunk: Data) {
-        if let clip = wakeDetector.feed(chunk), !checking { checkWake(clip) }
+        if checking { if postWake.count < 100 { postWake.append(chunk) } }
+        if let clip = wakeDetector.feed(chunk), !checking { postWake = []; checkWake(clip) }
     }
 
     private func checkWake(_ clip: [Data]) {
         checking = true
         Task {
-            defer { checking = false }
+            defer { checking = false; postWake = [] }
             guard let r = try? await ServerAPI.wake(pcm: clip.reduce(Data(), +)) else { return }
             if r.wake && phase == .sleeping {
                 sys("👂 ได้ยิน: \(r.text)"); Log.write("wake: \(r.text)")
-                wake(prebuffer: clip, greet: false)      // ส่งเสียงช่วงที่ปลุกให้ Gemini ด้วย ("Friday เปิด Chrome")
+                wake(prebuffer: clip + postWake, greet: false)   // ส่งเสียงช่วงที่ปลุก + ที่พูดต่อระหว่างเช็ค ("Friday … เปิด Chrome")
             }
         }
     }
@@ -212,7 +214,8 @@ final class FridayController: ObservableObject {
     func wake(prebuffer: [Data], greet: Bool) {
         if earMuted { setEarMuted(false) }            // เรียกคุยเอง = เปิดหูคืน (ไม่งั้น session ไม่มีไมค์)
         guard phase == .sleeping, let config else { return }
-        audio.chime()
+        // ลำโพง AirPlay: เสียงติ๊งดีเลย์ 2 วิ แถมทำให้ปิดไมค์ ~3 วิ (กันเสียงสะท้อน) → คำสั่งที่พูดต่อทันทีหาย · ใช้ไฟบนจอแทน
+        if !audio.outputAirPlay { audio.chime() }
         setPhase(.connecting)
         connectQueue = prebuffer
         onWantsPanel?(true)

@@ -23,6 +23,8 @@ enum ServerAPI {
         let tools: JSONValue
         var outputPriority: [String]? = nil
         var inputPriority: [String]? = nil
+        var tts: TTS? = nil                  // เสียง ElevenLabs แทนเสียง Gemini (server เป็นคนเรียก)
+        struct TTS: Decodable { let provider: String?; let voiceName: String? }
         var airplayEchoTailSec: Double? = nil   // ลำโพง AirPlay (HomePod) ดีเลย์ → ปิดไมค์หลัง Friday พูดจบนานขึ้น
         var farewell: String? = nil
         var stopWords: String? = nil
@@ -123,6 +125,12 @@ enum ServerAPI {
     }
 
     /// tools ที่ server ทำให้ (remember / vault_lookup / get_usage)
+    /// ข้อความ → PCM16 24k (ElevenLabs ผ่าน server) · nil ถ้าไม่สำเร็จ
+    static func tts(_ text: String) async -> Data? {
+        do { return try await request("/api/tts", method: "POST", json: ["text": text], timeout: 25) }
+        catch { Log.write("tts: ผิดพลาด \(error)"); return nil }
+    }
+
     static func tool(_ name: String, args: [String: Any]) async -> [String: Any] {
         guard let data = try? await request("/api/tool/\(name)", method: "POST", json: args),
               let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return ["ok": false, "result": "server ไม่ตอบ"] }

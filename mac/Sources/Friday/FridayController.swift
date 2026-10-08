@@ -53,6 +53,12 @@ final class FridayController: ObservableObject {
 
     private var connectQueue: [Data] = []
     private var speakEndedAt = Date.distantPast
+    // ---- เสียง ElevenLabs: ทิ้งเสียง Gemini แล้วอ่านข้อความถอดเสียงแทน ทีละช่วง (ขอพร้อมกัน เล่นตามลำดับ) ----
+    private var ttsOn: Bool { config?.tts?.provider == "elevenlabs" }
+    private var ttsBuf = "", ttsFirst = true
+    private var ttsGen = 0, ttsPending = 0
+    private var ttsTail: Task<Void, Never>?
+    private var voiceBusy: Bool { speaking || ttsPending > 0 }
     private var lastActivity = Date()
     private var meIndex: Int?, friIndex: Int?
     private struct Confirm { var task: String; var heard = ""; var armed = false; let at = Date() }   // armed = Friday ถามแล้ว → เริ่มฟังคำตอบ
@@ -155,7 +161,7 @@ final class FridayController: ObservableObject {
                 if let t0 = self.sessionStart, Date().timeIntervalSince(t0) > (self.config?.maxSessionSec ?? 720) {   // เพดานต่อรอบ (กัน busy ค้างแล้วเปิดจน Google ตัด)
                     self.sys("⏱️ คุยครบเวลาต่อรอบ — พักก่อน เรียก \"Friday\" ใหม่ได้เลย"); self.endSession(); return
                 }
-                if self.speaking || !self.confirms.isEmpty || !self.pendingResults.isEmpty || self.activeJobs > 0 {
+                if self.voiceBusy || !self.confirms.isEmpty || !self.pendingResults.isEmpty || self.activeJobs > 0 {
                     self.lastActivity = Date(); return
                 }
                 // ปิดไมค์อยู่ = ผู้ใช้ตั้งใจพักคุย (เช่น คุยกับคนอื่น) → รอนานกว่า แต่ไม่เกิน 3 นาที
@@ -176,7 +182,7 @@ final class FridayController: ObservableObject {
             // ไม่มีตัวตัดเสียงสะท้อน (เช่น เสียงออกลำโพงจอ + ไมค์หูฟัง) → ไมค์จะได้ยิน Friday แล้ววนลูปคุยกับตัวเอง
             // จึงไม่ส่งเสียงไมค์ระหว่าง Friday พูด + ช่วงหางเสียง 0.8 วิ (AirPlay/HomePod เล่นช้า ~2 วิ → หางยาวขึ้น) แลกกับการพูดแทรกไม่ได้
             let tail = audio.outputAirPlay ? (config?.airplayEchoTailSec ?? 2.5) : 0.8
-            if (!audio.aecEnabled || audio.outputAirPlay) && (speaking || Date().timeIntervalSince(speakEndedAt) < tail) { micLevel = 0; return }
+            if (!audio.aecEnabled || audio.outputAirPlay) && (voiceBusy || Date().timeIntervalSince(speakEndedAt) < tail) { micLevel = 0; return }
             micLevel = WakeDetector.rms(chunk)
             live?.sendAudio(chunk)
         case .connecting: if !micMuted { connectQueue.append(chunk) }
@@ -277,8 +283,8 @@ final class FridayController: ObservableObject {
         let t0 = Date()
         func tick() {
             guard phase == .live || phase == .connecting else { return }
-            let quiet = !speaking && Date().timeIntervalSince(t0) > 1.5
-            if quiet || Date().timeIntervalSince(t0) > 10 {
+            let quiet = !voiceBusy && Date().timeIntervalSince(t0) > 1.5
+            if quiet || Date().timeIntervalSince(t0) > (ttsOn ? 20 : 10) {
                 Log.write("session: Friday จบเอง\(mute ? " + ปิดหู" : "")")
                 endSession()
                 if mute || pendingMute { pendingMute = false; setEarMuted(true) }
@@ -288,6 +294,47 @@ final class FridayController: ObservableObject {
             }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { tick() }
+    }
+
+    /// ตัดข้อความเป็นช่วงที่จบวลี (เว้นวรรค/เครื่องหมาย) แล้วส่งไปทำเสียง · ช่วงแรกของ turn สั้นหน่อยให้ได้ยินเร็ว
+    private func ttsFlush(final: Bool) {
+        while true {
+            let text: String
+            if final {
+                text = ttsBuf; ttsBuf = ""
+            } else {
+                let minLen = ttsFirst ? 18 : 70
+                guard ttsBuf.count >= minLen,
+                      let cut = ttsBuf.lastIndex(where: { $0 == " " || ".!?…\n".contains($0) }),
+                      ttsBuf.distance(from: ttsBuf.startIndex, to: cut) >= minLen / 2 else { return }
+                let end = ttsBuf.index(after: cut)
+                text = String(ttsBuf[..<end]); ttsBuf = String(ttsBuf[end...])
+            }
+            let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !t.isEmpty { ttsSpeak(t) }
+            if final { ttsFirst = true; return }
+            ttsFirst = false
+        }
+    }
+
+    private func ttsSpeak(_ text: String) {
+        let gen = ttsGen, prev = ttsTail
+        let fetch = Task { await ServerAPI.tts(text) }           // ขอเสียงทันที (ขนานกับช่วงก่อนหน้า)
+        ttsPending += 1
+        ttsTail = Task { @MainActor [weak self] in
+            await prev?.value
+            let pcm = await fetch.value
+            guard let self else { return }
+            if gen == self.ttsGen, let pcm {
+                self.outLevel = WakeDetector.rms(pcm.prefix(9600))
+                self.audio.play(pcm16: pcm)
+            } else if pcm == nil { _ = self.sys("🔇 สร้างเสียงไม่ได้ (ElevenLabs)") }
+            if gen == self.ttsGen { self.ttsPending = max(0, self.ttsPending - 1) }
+        }
+    }
+
+    private func ttsCancel() {
+        ttsGen += 1; ttsPending = 0; ttsBuf = ""; ttsFirst = true; ttsTail = nil
     }
 
     func endSession() {
@@ -301,6 +348,7 @@ final class FridayController: ObservableObject {
         ending = false; userTurn = ""
         lastFri = ""; micLevel = 0; outLevel = 0; confirms = [:]; pendingConfirm = nil; muteAfterEnd = false
         live?.close(); live = nil
+        ttsCancel()
         audio.flush()
         meIndex = nil; friIndex = nil; connectQueue = []
         if case .error = phase { return }
@@ -321,11 +369,12 @@ final class FridayController: ObservableObject {
             if pendingGreeting, let g = config?.greeting { live?.sendText(g) }
             pendingGreeting = false
         case .audio(let d):
-            if muteAfterEnd { return }
+            if muteAfterEnd || ttsOn { return }
             outLevel = WakeDetector.rms(d)
             audio.play(pcm16: d)
         case .interrupted:
             Log.write("ev: interrupted (fri=\(friTurn.count) chars)")
+            ttsCancel()
             audio.flush()
         case .inputText(let t):
             let newTurn = meIndex == nil
@@ -343,7 +392,9 @@ final class FridayController: ObservableObject {
             lastFri = friIndex == nil ? t : lastFri + t
             if let i = friIndex { messages[i].text += t } else { messages.append(.init(kind: .fri, text: t)); friIndex = messages.count - 1 }
             meIndex = nil
+            if ttsOn { ttsBuf += t; ttsFlush(final: false) }
         case .turnComplete:
+            if ttsOn { ttsFlush(final: true) }
             Log.write("ev: turnComplete user=\(userTurn.count) fri=\(friTurn.count)")
             // บันทึกบทสนทนาที่คุยกับ Friday จริง (หลังปลุกแล้วเท่านั้น — เสียงที่ได้ยินทั่วไปไม่ถูกบันทึก)
             if !userTurn.isEmpty { Log.chat("🧑 \(userTurn)") }
@@ -472,7 +523,7 @@ final class FridayController: ObservableObject {
 
     /// ส่งผลงานนานให้ Friday พูด ตอนที่ไม่ได้พูดทับ
     private func flushResults() {
-        guard phase == .live, !pendingResults.isEmpty, !speaking else { return }
+        guard phase == .live, !pendingResults.isEmpty, !voiceBusy else { return }
         live?.sendText(pendingResults.removeFirst())
         userSpoke = false                                     // ข้อความนี้ไม่ใช่เสียงผู้ใช้
     }

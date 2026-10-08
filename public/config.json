@@ -262,6 +262,13 @@
     "*katana*",
     "*executor*"
   ],
+  "tts": {
+    "provider": "elevenlabs",
+    "voiceId": "nealpwJT5tCyJFKDzEq8",
+    "voiceName": "Aom",
+    "model": "eleven_v3"
+  },
+  "_ttsNote": "แอป Mac: ทิ้งเสียง Gemini แล้วให้ ElevenLabs อ่านข้อความถอดเสียงแทน (ทีละประโยค) · ลบ provider = กลับไปใช้เสียง Gemini · HomePod (/api/ask, announce) ใช้ด้วย",
   "homepod": {
     "id": "42:60:41:F8:8C:8C",
     "voice": "Kanya"

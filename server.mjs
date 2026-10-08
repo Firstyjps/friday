@@ -10,6 +10,7 @@ import { RISKY, READ_ONLY_TOOLS, HARD_DENY, SECRET_DENY, agentEnv, CONFIRM_MARK,
 import { AgentSession } from './lib/claude-agent.mjs';
 import { decide as policyDecide, secretCheck, ruleKey, RuleStore } from './lib/policy.mjs';
 import { speak as homepodSpeak, askText } from './lib/homepod.mjs';
+import { synth, ttsEnabled } from './lib/tts.mjs';
 
 const PORT = Number(process.env.PORT || 4850);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -482,7 +483,7 @@ const serverTools = {
 
 // ---------- HomePod: (C) พูดออกลำโพง · (B) "หวัดดี Siri เลขาส่วนตัว" ----------
 const loadCfg = async () => JSON.parse(await readText(join(PUBLIC, 'config.json')) || '{}');
-const announce = async (text) => homepodSpeak(text, (await loadCfg()).homepod, log);
+const announce = async (text) => { const cfg = await loadCfg(); return homepodSpeak(text, cfg.homepod, log, cfg); };
 serverTools.announce_homepod = async ({ text }) => announce(text);
 let homepodPending = null;    // job ที่ HomePod ถามยืนยันค้างไว้ → "เลขาส่วนตัว ยืนยัน" ครั้งถัดไปจะยืนยันงานนี้
 const chatLog = (who, text) => appendFile(CHAT, `${new Date().toISOString().slice(0, 19)}Z | ${who} ${String(text).replace(/\n/g, ' ')}\n`).catch(() => {});
@@ -573,6 +574,16 @@ http.createServer(async (req, res) => {
         const r = await detectWake(await readRaw(req));
         if (r.wake) log(`WAKE | ${r.phrase}`); else log(`wake check: no (${r.text.length} chars)`);   // ไม่ log ข้อความ (privacy)
         return json(res, 200, r);
+      }
+      if (req.method === 'POST' && url.pathname === '/api/tts') {          // แอป Mac: ข้อความที่ Gemini ตอบ → เสียง ElevenLabs (PCM16 24k)
+        const { text } = await readBody(req);
+        const cfg = await loadCfg();
+        if (!ttsEnabled(cfg)) return json(res, 503, { error: 'tts off' });
+        try {
+          const pcm = await synth(text, cfg.tts, { log });
+          if (!pcm) return json(res, 400, { error: 'text required' });
+          res.writeHead(200, { 'Content-Type': 'application/octet-stream' }); return res.end(pcm);
+        } catch (e) { log(`TTS error | ${e.message}`); return json(res, 502, { error: e.message }); }
       }
       if (req.method === 'POST' && url.pathname === '/api/ask') {          // Siri Shortcut "เลขาส่วนตัว" (HomePod/iPhone)
         const { text } = await readBody(req);

@@ -36,7 +36,7 @@ enum OverlayDemo {
         let only = ProcessInfo.processInfo.environment["FRIDAY_DEMO_MODE"]
         func reset() {
             c.phase = .live; c.speaking = false; c.micMuted = false; c.lastMe = ""; c.lastFri = ""
-            c.activeJobs = 0; c.pendingConfirm = nil; c.resultLine = ""; c.wokeAt = nil; c.doneAt = nil
+            c.activeJobs = 0; c.pendingConfirm = nil; c.resultLine = ""; c.wokeAt = nil; c.doneAt = nil; c.awaitingReply = false
         }
         func show(_ m: OverlayView.Mode) {
             reset()
@@ -44,6 +44,7 @@ enum OverlayDemo {
             case .sleep: c.phase = .sleeping
             case .wake: c.phase = .connecting; c.wokeAt = Date()
             case .listen: c.lastMe = user
+            case .think: c.lastMe = user; c.awaitingReply = true
             case .speak: c.lastMe = user; c.lastFri = fri; c.speaking = true
             case .job: c.lastMe = user; c.lastFri = fri; c.jobTask = "หาไฟล์ PDF ใน Downloads"; c.activeJobs = 1
             case .confirm: c.pendingConfirm = .init(jobId: "demo", task: "ย้ายไฟล์ PDF 12 ไฟล์ใน Downloads ไป Documents",
@@ -53,14 +54,14 @@ enum OverlayDemo {
             }
             print("mode: \(m)")
         }
-        if let only, let m = [OverlayView.Mode.sleep, .wake, .listen, .speak, .job, .confirm, .done, .muted].first(where: { "\($0)" == only }) {
+        if let only, let m = [OverlayView.Mode.sleep, .wake, .listen, .think, .speak, .job, .confirm, .done, .muted].first(where: { "\($0)" == only }) {
             show(m)
             if m == .wake || m == .done {             // one-shot → เล่นซ้ำทุก 3 วิ
                 Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { _ in MainActor.assumeIsolated { show(m) } }
             }
             return
         }
-        let steps: [(OverlayView.Mode, Double)] = [(.sleep, 1.2), (.wake, 0.9), (.listen, 3), (.speak, 3.6), (.job, 2.6), (.confirm, 4), (.done, 2.6), (.muted, 2.4)]
+        let steps: [(OverlayView.Mode, Double)] = [(.sleep, 1.2), (.wake, 0.9), (.listen, 3), (.think, 1.6), (.speak, 3.6), (.job, 2.6), (.confirm, 4), (.done, 2.6), (.muted, 2.4)]
         var i = 0
         func next() {
             let (m, d) = steps[i % steps.count]

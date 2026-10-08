@@ -8,6 +8,7 @@ final class CascadeSession: LiveSession {
     private let id = UUID().uuidString
     private var closed = false
     private var busy = false                       // รอบคุยกำลังวิ่ง (รอ server / รอผลเครื่องมือ) → ไม่ฟังเสียงใหม่
+    override var inTurn: Bool { busy }
     private var queuedTexts: [String] = []
     private var pendingTools = 0
     private var awaitingTools = false              // server ส่ง done แล้ว รอผลเครื่องมือครบ (กันตอบก่อนได้ tool ครบทุกตัว)
@@ -62,7 +63,8 @@ final class CascadeSession: LiveSession {
         if isSpeech { voiced += 1; silent = 0 } else { silent += 1 }
         if voiced >= Self.minVoiced, !partialBusy, Date().timeIntervalSince(partialAt) > 0.5 { partial(seg.reduce(Data(), +)) }
         // ช่วงแรกหลังคำปลุก: คนมักเว้นจังหวะหลัง "ฟรายเดย์" → รอเงียบนานขึ้น (1.3 วิ) จะได้รวมเป็นประโยคเดียว
-        let endSilence = firstSegment && voiced < 15 ? 13 : Self.endSilence
+        // พูดยาว (>2.5 วิ) = กำลังอธิบาย มักหยุดคิดกลางประโยค → รอเงียบ 1.4 วิ (เดิม 0.7 วิ ตัดกลางประโยคแล้วที่พูดต่อหาย 9 ต.ค.)
+        let endSilence = firstSegment && voiced < 15 ? 13 : voiced >= 25 ? 14 : Self.endSilence
         guard silent >= endSilence || seg.count >= Self.maxChunks else { return }
         firstSegment = false
         let clip = seg.reduce(Data(), +), enough = voiced >= Self.minVoiced

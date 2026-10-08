@@ -56,6 +56,7 @@ final class FridayController: ObservableObject {
     @Published var wokeAt: Date?                  // one-shot: แสงไล่ตามขอบตอนปลุก (0.9 วิ)
     @Published var doneAt: Date?                  // one-shot: แถว "เสร็จแล้ว" + แสงแตกจากกลางคลื่น (2.6 วิ)
     @Published var doneText = ""
+    @Published var awaitingReply = false          // cascade: ผู้ใช้พูดจบแล้ว รอ Friday คิด → overlay โหมด "กำลังคิด"
     private let convo = UUID().uuidString          // หนึ่งรอบเปิดแอป = หนึ่ง Claude session (จำงานก่อนหน้าได้)
 
     private var connectQueue: [Data] = []
@@ -169,7 +170,7 @@ final class FridayController: ObservableObject {
                 if let t0 = self.sessionStart, Date().timeIntervalSince(t0) > (self.config?.maxSessionSec ?? 720) {   // เพดานต่อรอบ (กัน busy ค้างแล้วเปิดจน Google ตัด)
                     self.sys("⏱️ คุยครบเวลาต่อรอบ — พักก่อน เรียก \"Friday\" ใหม่ได้เลย"); self.endSession(); return
                 }
-                if self.voiceBusy || !self.confirms.isEmpty || !self.pendingResults.isEmpty || self.activeJobs > 0 {
+                if self.voiceBusy || self.live?.inTurn == true || !self.confirms.isEmpty || !self.pendingResults.isEmpty || self.activeJobs > 0 {
                     self.lastActivity = Date(); return
                 }
                 // ปิดไมค์อยู่ = ผู้ใช้ตั้งใจพักคุย (เช่น คุยกับคนอื่น) → รอนานกว่า แต่ไม่เกิน 3 นาที
@@ -378,7 +379,7 @@ final class FridayController: ObservableObject {
         sessionStart = nil
         micMuted = false
         ending = false; userTurn = ""
-        lastFri = ""; lastMe = ""; resultLine = ""; doneAt = nil; micLevel = 0; outLevel = 0; confirms = [:]; pendingConfirm = nil; muteAfterEnd = false
+        lastFri = ""; lastMe = ""; resultLine = ""; awaitingReply = false; doneAt = nil; micLevel = 0; outLevel = 0; confirms = [:]; pendingConfirm = nil; muteAfterEnd = false
         live?.close(); live = nil
         ttsCancel()
         audio.flush()
@@ -412,6 +413,7 @@ final class FridayController: ObservableObject {
             let newTurn = meIndex == nil
             if let i = meIndex { messages[i].text += t } else { messages.append(.init(kind: .me, text: t)); meIndex = messages.count - 1 }
             if newTurn { lastMe = t; lastFri = ""; resultLine = "" } else { lastMe += t }   // ผู้ใช้เริ่มพูดใหม่ → overlay กลับไปโหมดฟัง
+            if live is CascadeSession { awaitingReply = true }    // cascade ได้ข้อความตอนพูดจบแล้วเท่านั้น (Gemini Live ถอดระหว่างพูด)
             friIndex = nil
             userTurn += t
             userSpoke = true
@@ -422,6 +424,7 @@ final class FridayController: ObservableObject {
             // โชว์บน overlay อย่างเดียว — ไม่แตะ userTurn/userSpoke/คำยืนยัน (ด่านความปลอดภัยใช้ข้อความจริงจาก Scribe)
             if meIndex == nil, friIndex == nil, !speaking { lastMe = t; lastFri = ""; resultLine = "" }
         case .outputText(let t):
+            awaitingReply = false
             if muteAfterEnd { Log.write("ev: drop text after end: \(t.prefix(30))"); return }
             if friIndex == nil { Log.write("ev: fri-start (prev fri=\(friTurn.count) chars)") }
             friTurn += t; friSpoke = true
@@ -430,6 +433,7 @@ final class FridayController: ObservableObject {
             meIndex = nil
             if ttsOn { ttsBuf += t; ttsFlush(final: false) }
         case .turnComplete:
+            awaitingReply = false
             if ttsOn { ttsFlush(final: true) }
             Log.write("ev: turnComplete user=\(userTurn.count) fri=\(friTurn.count)")
             // บันทึกบทสนทนาที่คุยกับ Friday จริง (หลังปลุกแล้วเท่านั้น — เสียงที่ได้ยินทั่วไปไม่ถูกบันทึก)
@@ -444,6 +448,7 @@ final class FridayController: ObservableObject {
             userTurn = ""; friTurn = ""
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in self?.flushResults() }
         case .toolCall(let id, let name, let args):
+            awaitingReply = false
             Log.write("ev: tool \(name) (fri=\(friTurn.count) chars)")
             // เครื่องมือที่ "ลงมือ" ต้องมาจากเสียงผู้ใช้จริง ไม่ใช่จากข้อความที่เราส่งให้ Gemini (ผลงาน/เว็บ/Vault) — กัน prompt injection
             let acts = (config?.actionTools ?? ["run_on_mac", "remember", "run_shortcut", "open_app", "open_url"]).contains(name)

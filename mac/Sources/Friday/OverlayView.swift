@@ -9,9 +9,9 @@ struct OverlayView: View {
     @ObservedObject var ui: OverlayUI
     static let width: CGFloat = 560
 
-    enum Mode: Equatable { case sleep, wake, listen, speak, job, confirm, done, muted }
+    enum Mode: Equatable { case sleep, wake, listen, think, speak, job, confirm, done, muted }
 
-    /// ลำดับ: ยืนยัน > ปิดไมค์ > ปลุก (0.9 วิ) > เสร็จ (2.6 วิ) > งาน > พูด > ฟัง
+    /// ลำดับ: ยืนยัน > ปิดไมค์ > ปลุก (0.9 วิ) > เสร็จ (2.6 วิ) > งาน > พูด > คิด > ฟัง
     static func mode(_ c: FridayController, now: Date = Date()) -> Mode {
         if c.pendingConfirm != nil { return .confirm }
         let talking = c.phase == .live || c.phase == .connecting
@@ -21,6 +21,7 @@ struct OverlayView: View {
         if c.activeJobs > 0 { return .job }
         guard talking else { return .sleep }
         if c.speaking || !c.lastFri.isEmpty { return .speak }
+        if c.awaitingReply { return .think }      // พูดจบแล้ว รอคำตอบ → ข้อความผู้ใช้ย่อลงทันที ไม่ค้างตัวใหญ่
         return .listen
     }
 
@@ -36,7 +37,7 @@ struct OverlayView: View {
             curtain(m)
             edgeGlow(m)
             WaveView(c: c, ui: ui).frame(width: 140)
-            conversation(m).modifier(PanelSlot(on: [.listen, .speak, .job, .done, .muted].contains(m)))
+            conversation(m).modifier(PanelSlot(on: [.listen, .think, .speak, .job, .done, .muted].contains(m)))
             confirmPanel.modifier(PanelSlot(on: m == .confirm))
         }
         .frame(width: Self.width)
@@ -123,6 +124,7 @@ struct OverlayView: View {
 
     private func status(_ m: Mode) -> String {
         switch m {
+        case .think: return "กำลังคิด"
         case .speak: return "กำลังพูด"
         case .job: return "Mac กำลังทำ"
         case .done: return "เสร็จแล้ว"
@@ -346,6 +348,7 @@ final class WaveEngine {
         case .sleep: return (0, 0.06, 0, nil)
         case .wake: return (0.9, 0.3, 40, nil)
         case .listen: return (1, 0.22, 34, nil)
+        case .think: return (0.5, 0.3, 30, nil)
         case .speak: return (1, 0.3, 58, nil)
         case .job: return (0.6, 0.32, 40, nil)
         case .confirm: return (0.55, 0.3, 38, [255, 200, 74])
@@ -370,7 +373,7 @@ final class WaveEngine {
         let micT: Double
         switch p {
         case .listen, .speak, .wake: micT = level
-        case .job: micT = 0.5
+        case .job, .think: micT = 0.5
         case .confirm: micT = 0.45 + 0.2 * sin(2.4 * t)
         case .done: micT = 0.7
         default: micT = 0
@@ -378,7 +381,7 @@ final class WaveEngine {
         mic += (micT - mic) * (1 - pow(0.0008, dt))
         if ripple >= 0 { ripple += dt / 0.75; if ripple > 1.3 { ripple = -1 } }
         if flash > 0 { flash = max(0, flash - dt / 1.1) }
-        let scan = p == .job ? 0.5 + 0.42 * sin(1.9 * t) : -1
+        let scan = p == .job || p == .think ? 0.5 + 0.42 * sin((p == .think ? 3.2 : 1.9) * t) : -1   // คิด = แสงวิ่งเร็วกว่างาน
 
         var out: [Bar] = []
         out.reserveCapacity(Self.count)

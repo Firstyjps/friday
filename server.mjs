@@ -11,6 +11,7 @@ import { AgentSession } from './lib/claude-agent.mjs';
 import { decide as policyDecide, secretCheck, ruleKey, RuleStore } from './lib/policy.mjs';
 import { speak as homepodSpeak, askText } from './lib/homepod.mjs';
 import { synth, ttsEnabled } from './lib/tts.mjs';
+import { Cascade } from './lib/cascade.mjs';
 
 const PORT = Number(process.env.PORT || 4850);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -527,6 +528,19 @@ async function homepodAsk(text) {
   function reply(a) { const t = String(a).replace(/[*#`_>|]/g, '').trim(); chatLog('🤖🔊', t); log(`HOMEPOD ask | ${text.slice(0, 100)} → ${t.slice(0, 150)}`); return { answer: t }; }
 }
 
+// ---------- โหมด cascade (แอป Mac): เสียง → Gemini text → Gemini TTS ----------
+async function scribe(wav) {          // ถอดเสียงผู้ใช้ไว้ให้แอปเช็คคำสั่ง/คำยืนยัน + บันทึกบทสนทนา (ElevenLabs Scribe แม่นสุดจากที่วัด)
+  if (!process.env.ELEVENLABS_API_KEY) return '';
+  const f = new FormData();
+  f.append('file', new Blob([wav], { type: 'audio/wav' }), 'a.wav'); f.append('model_id', 'scribe_v1'); f.append('language_code', 'tha');
+  f.append('tag_audio_events', 'false');
+  const r = await fetch('https://api.elevenlabs.io/v1/speech-to-text', { method: 'POST', headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY }, body: f, signal: AbortSignal.timeout(10000) });
+  if (!r.ok) throw new Error(`scribe ${r.status}: ${(await r.text()).slice(0, 150)}`);
+  return (await r.json()).text ?? '';
+}
+const cascade = new Cascade({ key: KEY, log, wav16k: pcmToWav, scribe });
+const turnTails = new Map();          // session → promise (ทีละรอบ)
+
 // ---------- HTTP ----------
 const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
 const readBody = (req) => new Promise((resolve, reject) => {
@@ -584,6 +598,28 @@ http.createServer(async (req, res) => {
           if (!pcm) return json(res, 400, { error: 'text required' });
           res.writeHead(200, { 'Content-Type': 'application/octet-stream' }); return res.end(pcm);
         } catch (e) { log(`TTS error | ${e.message}`); return json(res, 502, { error: e.message }); }
+      }
+      if (req.method === 'POST' && url.pathname === '/api/cascade/open') {
+        const { session, extra } = await readBody(req);
+        if (!session) return json(res, 400, { error: 'session required' });
+        const cfg = await loadCfg();
+        cascade.open(String(session), { system: cfg.system + String(extra || ''), cfg });
+        return json(res, 200, { ok: true });
+      }
+      if (req.method === 'POST' && url.pathname === '/api/cascade/close') {
+        const { session } = await readBody(req); cascade.close(String(session || '')); turnTails.delete(String(session || ''));
+        return json(res, 200, { ok: true });
+      }
+      if (req.method === 'POST' && url.pathname === '/api/turn') {          // หนึ่งรอบคุย → NDJSON stream
+        const session = url.searchParams.get('session') || '';
+        const input = (req.headers['content-type'] || '').startsWith('application/octet-stream')
+          ? { audio: await readRaw(req, 3_000_000) } : await readBody(req);
+        res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-cache' });
+        const emit = (o) => { if (!res.writableEnded) res.write(JSON.stringify(o) + '\n'); };
+        const prev = turnTails.get(session) ?? Promise.resolve();
+        const run = prev.then(() => cascade.turn(session, input, emit)).catch((e) => { log(`CASCADE error ${e.message}`); emit({ t: 'error', error: e.message }); });
+        turnTails.set(session, run);
+        await run; return res.end();
       }
       if (req.method === 'POST' && url.pathname === '/api/ask') {          // Siri Shortcut "เลขาส่วนตัว" (HomePod/iPhone)
         const { text } = await readBody(req);

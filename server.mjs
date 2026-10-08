@@ -567,11 +567,11 @@ http.createServer(async (req, res) => {
       const t = url.pathname.match(/^\/api\/tool\/(\w+)$/);
       if (req.method === 'POST' && t && Object.hasOwn(serverTools, t[1])) return json(res, 200, await serverTools[t[1]](await readBody(req)));
       if (req.method === 'POST' && url.pathname === '/api/ping') {   // heartbeat จากหน้าโหมดห้อง (debug)
-        const b = await readBody(req); roomSeenAt = Date.now(); if (b.track !== 'live' || b.ctx !== 'running') log(`ping ⚠️ | ${JSON.stringify(b)}`); return json(res, 200, { ok: true });
+        const b = await readBody(req); roomSeenAt = Date.now(); if (b.track !== "live" || b.ctx !== "running" ) log(`ping | ${JSON.stringify(b)}`); return json(res, 200, { ok: true });
       }
       if (req.method === 'POST' && url.pathname === '/api/wake') {
         const r = await detectWake(await readRaw(req));
-        if (r.wake) log(`WAKE | ${r.phrase}`);
+        if (r.wake) log(`WAKE | ${r.phrase}`); else log(`wake check: no (${r.text.length} chars)`);   // ไม่ log ข้อความ (privacy)
         return json(res, 200, r);
       }
       if (req.method === 'POST' && url.pathname === '/api/ask') {          // Siri Shortcut "เลขาส่วนตัว" (HomePod/iPhone)

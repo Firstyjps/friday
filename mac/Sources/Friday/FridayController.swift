@@ -143,7 +143,8 @@ final class FridayController: ObservableObject {
                 let st = self.wakeDetector.takeStats()
                 await ServerAPI.ping(["app": "mac", "phase": "\(self.phase)", "track": "live", "ctx": "running",
                                       "input": self.audio.inputName, "frames": st.frames, "peak": Int(st.peak),
-                                      "noise": Int(self.wakeDetector.noiseFloor), "muted": self.earMuted])
+                                      "noise": Int(self.wakeDetector.noiseFloor), "muted": self.earMuted,
+                                      "tap": self.audio.tapCount, "convFail": self.audio.convFail, "inRunning": self.audio.inputRunning])
             }
         }
         // เงียบ/ไม่มีงานค้าง นานเกิน idleMs → กลับไปรอคำปลุก

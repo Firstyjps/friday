@@ -79,7 +79,7 @@ final class AudioIO {
             throw NSError(domain: "Friday", code: 1, userInfo: [NSLocalizedDescriptionKey: "ไม่พบ\(outs.isEmpty ? "ลำโพง" : "ไมค์")ที่ใช้ได้"])
         }
 
-        if !vpUnsupported, outs[0].id == AudioDevices.defaultDevice(input: false), ins[0].id == AudioDevices.defaultDevice(input: true) {
+        if !vpUnsupported, !outs[0].airplay, outs[0].id == AudioDevices.defaultDevice(input: false), ins[0].id == AudioDevices.defaultDevice(input: true) {
             do { try buildAEC(out: outs[0], inp: ins[0]); return }
             catch { vpUnsupported = true; Log.write("audio: voice processing ใช้ไม่ได้ (\((error as NSError).code)) → แยกไมค์/ลำโพง") }
         }
@@ -157,7 +157,9 @@ final class AudioIO {
     }
 
     private func installTap(_ e: AVAudioEngine) throws {
-        let fmt = e.inputNode.outputFormat(forBus: 0)
+        // ตั้งอุปกรณ์เองแล้ว outputFormat ยังค้างเป็น rate ของลำโพง default (เช่น 44.1k AirPlay) ขณะไมค์จริง 48k → tap ไม่ได้ buffer เลย (8 ต.ค.)
+        // จึงใช้ format ของ hardware ไมค์ · โหมด voice processing ใช้ outputFormat ตามเดิม
+        let fmt = e.inputNode.isVoiceProcessingEnabled ? e.inputNode.outputFormat(forBus: 0) : e.inputNode.inputFormat(forBus: 0)
         guard fmt.sampleRate > 0, fmt.channelCount > 0 else { throw NSError(domain: "Friday", code: 4, userInfo: [NSLocalizedDescriptionKey: "ไมค์ไม่มีสัญญาณ"]) }
         let conv = AVAudioConverter(from: fmt, to: micFormat)
         micQueue.sync { converter = conv; micBuffer.removeAll() }   // สลับ converter บนคิวเดียวกับที่ใช้ (กัน data race)
@@ -234,9 +236,12 @@ final class AudioIO {
     }
 
     // ---------- ไมค์ ----------
+    var inputRunning: Bool { inEngine.isRunning }
+    private(set) var tapCount = 0, convFail = 0     // debug: ไมค์ส่ง buffer มากี่ก้อน / แปลงไม่สำเร็จกี่ก้อน
     private func convertAndEmit(_ buf: AVAudioPCMBuffer) {
+        tapCount += 1
         checkDeadInput(buf)
-        guard let converter else { return }
+        guard let converter else { convFail += 1; return }
         let ratio = micFormat.sampleRate / buf.format.sampleRate
         let cap = AVAudioFrameCount(Double(buf.frameLength) * ratio + 32)
         guard let out = AVAudioPCMBuffer(pcmFormat: micFormat, frameCapacity: cap) else { return }
@@ -246,7 +251,7 @@ final class AudioIO {
             if fed { status.pointee = .noDataNow; return nil }
             fed = true; status.pointee = .haveData; return buf
         }
-        guard err == nil, out.frameLength > 0, let p = out.int16ChannelData else { return }
+        guard err == nil, out.frameLength > 0, let p = out.int16ChannelData else { convFail += 1; return }
         micBuffer.append(Data(bytes: p[0], count: Int(out.frameLength) * 2))
         while micBuffer.count >= 3200 {                     // 100ms @16kHz
             let chunk = micBuffer.prefix(3200)

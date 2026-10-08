@@ -382,7 +382,7 @@ async function context() {
   const memory = (await readText(MEMORY)).trim().split('\n').slice(-60).join('\n');
   const since = Date.now() - 3 * 86400e3;
   const recent = (await readText(CHAT)).trim().split('\n')
-    .filter((l) => Date.parse(l.slice(0, 20)) > since).slice(-30)
+    .filter((l) => Date.parse(l.slice(0, 20)) > since).slice(-12)   // 30 บรรทัด = ~1.2k token ทุกรอบคุย → 12 พอจำบริบทล่าสุด (ลดค่าใช้จ่าย 8 ต.ค.)
     .map((l) => l.replace(/^(\S+)T(\d\d:\d\d)\S* \| /, '$1 $2 ')).join('\n');
   const shortcuts = (JSON.parse(await readText(join(PUBLIC, 'config.json')) || '{}').shortcutsAllowed ?? []).join(', ');
   return { memory, recent, shortcuts };

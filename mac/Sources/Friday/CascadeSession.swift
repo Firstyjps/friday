@@ -14,6 +14,7 @@ final class CascadeSession: LiveSession {
     private var awaitingTools = false              // server ส่ง done แล้ว รอผลเครื่องมือครบ (กันตอบก่อนได้ tool ครบทุกตัว)
     private var toolResponses: [[String: Any]] = []
     private var current: Task<Void, Never>?
+    private var gen = 0                            // รอบที่ถูกพูดแทรกแล้ว → event ที่ค้างมาทีหลังทิ้ง
 
     // ---- VAD: ตัดช่วงพูด (PCM16 16k ทีละ 100ms) ----
     private var noiseFloor: Double
@@ -119,15 +120,29 @@ final class CascadeSession: LiveSession {
     }
     private func run(json: [String: Any]) { start { try await ServerAPI.turn(session: self.id, json: json) } }
 
+    /// ผู้ใช้พูดแทรก: ตัดสาย (server หยุดทำเสียงที่เหลือ) แล้วฟังต่อทันที · รอผลเครื่องมืออยู่ = ยกเลิกไม่ได้ ปล่อยไว้
+    override func interrupt() {
+        guard busy, !awaitingTools, current != nil else { return }
+        gen += 1
+        current?.cancel(); current = nil
+        pendingTools = 0; toolResponses = []
+        busy = false
+        resetVAD()
+        onEvent?(.interrupted)
+        onEvent?(.turnComplete)
+    }
+
     private func start(seg: Int = -1, _ open: @escaping () async throws -> URLSession.AsyncBytes) {
         busy = true
+        gen += 1
+        let myGen = gen
         current = Task { @MainActor [weak self] in
             guard let self else { return }
             var pending = -1
             do {
                 let bytes = try await open()
                 for try await line in bytes.lines {
-                    if self.closed { return }
+                    if self.closed || self.gen != myGen { return }
                     guard let d = line.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { continue }
                     switch o["t"] as? String {
                     case "user": if let t = o["text"] as? String { self.finalSeg = max(self.finalSeg, seg); self.onEvent?(.inputText(t)) }
@@ -142,10 +157,10 @@ final class CascadeSession: LiveSession {
                     }
                 }
             } catch {
-                if self.closed || Task.isCancelled { return }
+                if self.closed || Task.isCancelled || self.gen != myGen { return }
                 Log.write("cascade: ผิดพลาด \(error.localizedDescription)")
             }
-            if self.closed { return }
+            if self.closed || self.gen != myGen { return }
             if pending > 0 && self.pendingTools > 0 {              // รอแอปทำเครื่องมือ → ครบแล้วเริ่มรอบต่อ
                 self.awaitingTools = true; self.flushTools(); return
             }

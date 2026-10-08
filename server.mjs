@@ -654,6 +654,9 @@ http.createServer(async (req, res) => {
           ? { audio: await readRaw(req, 3_000_000) } : await readBody(req);
         res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-cache' });
         const emit = (o) => { if (!res.writableEnded) res.write(JSON.stringify(o) + '\n'); };
+        const cut = new AbortController();                                   // แอปตัดสาย (ผู้ใช้พูดแทรก) → หยุดรอบนี้ ไม่ทำเสียงที่เหลือ
+        res.on('close', () => { if (!res.writableEnded) cut.abort(); });
+        input.signal = cut.signal;
         const prev = turnTails.get(session) ?? Promise.resolve();
         const run = prev.then(() => cascade.turn(session, input, emit)).catch((e) => { log(`CASCADE error ${e.message}`); emit({ t: 'error', error: e.message }); });
         turnTails.set(session, run);

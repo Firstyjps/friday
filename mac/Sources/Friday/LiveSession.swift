@@ -19,6 +19,8 @@ class LiveSession: NSObject, URLSessionWebSocketDelegate {
     var onEvent: ((Event) -> Void)?
     /// รอบคุยยังไม่จบ (รอ server คิด/ทำเสียง) → อย่าเพิ่งนับว่าเงียบ · Gemini Live ไม่ต้องใช้
     var inTurn: Bool { false }
+    /// ผู้ใช้พูดแทรก → หยุดรอบที่กำลังตอบ · Gemini Live จัดการเองจากเสียงที่ส่งไป
+    func interrupt() {}
     private var task: URLSessionWebSocketTask?
     private var session: URLSession?
     private var setup: [String: Any] = [:]

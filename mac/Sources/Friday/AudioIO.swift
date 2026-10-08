@@ -28,6 +28,8 @@ final class AudioIO {
     private(set) var aecEnabled = false
     private(set) var outputAirPlay = false
     var isSpeaking: Bool { pending > 0 }
+    /// ตัวแยกเสียงผู้ใช้พูดแทรก vs เสียงสะท้อน (ใช้ตอนไม่มี voice processing)
+    let echo = EchoGate()
 
     private var inEngine = AVAudioEngine()
     private var outEngine = AVAudioEngine()          // โหมด AEC: ตัวเดียวกับ inEngine
@@ -106,6 +108,7 @@ final class AudioIO {
 
     private func started(out: String, inp: String) {
         outputName = out; inputName = inp
+        echo.use(output: out, input: inp)
         Log.write("audio: 🔊 \(out) · 🎤 \(inp) · aec=\(aecEnabled) · airplay=\(outputAirPlay)")
         onDevicesChanged?()
     }
@@ -311,19 +314,21 @@ final class AudioIO {
             let src = raw.bindMemory(to: Int16.self)
             for i in 0..<n { dst[i] = Float(Int16(littleEndian: src[i])) / 32768 }
         }
-        schedule(buf)
+        if schedule(buf) { echo.played(pcm16: pcm16, sampleRate: playFormat.sampleRate) }
     }
 
-    private func schedule(_ buf: AVAudioPCMBuffer) {
-        guard outEngine.isRunning else { return }
+    @discardableResult
+    private func schedule(_ buf: AVAudioPCMBuffer) -> Bool {
+        guard outEngine.isRunning else { return false }
         pending += 1
         let gen = generation
         let p = player
         let ok = objcTry { p.scheduleBuffer(buf) { [weak self] in
             DispatchQueue.main.async { if let self, gen == self.generation, self.pending > 0 { self.pending -= 1 } }
         } }
-        if !ok { pending -= 1; return }
+        if !ok { pending -= 1; return false }
         if !player.isPlaying { safePlay() }
+        return true
     }
 
     private func resetPlayback() { generation += 1; pending = 0 }
@@ -345,6 +350,7 @@ final class AudioIO {
     func flush() {
         generation += 1
         player.stop()
+        echo.flushed()
         pending = 0
         if outEngine.isRunning { safePlay() }
     }

@@ -62,6 +62,11 @@ final class FridayController: ObservableObject {
 
     private var connectQueue: [Data] = []
     private var speakEndedAt = Date.distantPast
+    // ---- พูดแทรก (ไม่มีตัวตัดเสียงสะท้อน): ดู EchoGate ----
+    private var barged = false                    // ผู้ใช้พูดแทรกแล้ว → ส่งไมค์ตรงจนกว่า Friday จะพูดรอบใหม่
+    private var bargeBuf: [Data] = []             // ไมค์ช่วงที่กำลังตัดสินว่าพูดแทรกไหม (ส่งต่อเมื่อใช่)
+    private var learnWork: DispatchWorkItem?
+    private var bargeAt: Date?                    // พูดแทรกแล้วรอดูว่ามีคำพูดจริงไหม (ไม่มีใน 6 วิ = แทรกผิด → เข้มขึ้น)
     // ---- เสียง ElevenLabs: ทิ้งเสียง Gemini แล้วอ่านข้อความถอดเสียงแทน ทีละช่วง (ขอพร้อมกัน เล่นตามลำดับ) ----
     private var ttsOn: Bool { config?.tts?.provider == "elevenlabs" }
     private var ttsBuf = "", ttsFirst = true
@@ -108,6 +113,7 @@ final class FridayController: ObservableObject {
             audio.onSpeakingChanged = { [weak self] s in Task { @MainActor in
                 self?.speaking = s; self?.lastActivity = Date()
                 if !s { self?.speakEndedAt = Date(); self?.outLevel = 0 }
+                self?.echoSpeaking(s)
             } }
             audio.outputPriority = config!.outputPriority ?? []
             audio.inputPriority = config!.inputPriority ?? []
@@ -171,6 +177,7 @@ final class FridayController: ObservableObject {
                 if let t0 = self.sessionStart, Date().timeIntervalSince(t0) > (self.config?.maxSessionSec ?? 720) {   // เพดานต่อรอบ (กัน busy ค้างแล้วเปิดจน Google ตัด)
                     self.sys("⏱️ คุยครบเวลาต่อรอบ — พักก่อน เรียก \"Friday\" ใหม่ได้เลย"); self.endSession(); return
                 }
+                if let b = self.bargeAt, Date().timeIntervalSince(b) > 6 { self.bargeAt = nil; Log.write(self.audio.echo.penalize()) }
                 if self.voiceBusy || self.live?.inTurn == true || !self.confirms.isEmpty || !self.pendingResults.isEmpty || self.activeJobs > 0 {
                     self.lastActivity = Date(); return
                 }
@@ -184,15 +191,49 @@ final class FridayController: ObservableObject {
         }
     }
 
+    // ---------- พูดแทรก ----------
+    private func bargeIn() {
+        barged = true; bargeAt = Date()
+        audio.echo.resetRun()
+        Log.write("echo: ผู้ใช้พูดแทรก → Friday หยุดพูด")
+        ttsCancel()
+        audio.flush()
+        live?.interrupt()
+    }
+
+    /// Friday เริ่ม/หยุดพูด: เริ่มพูดรอบใหม่ = กลับมากรองเสียงสะท้อน · พูดจบเอง (ไม่ถูกแทรก) = เรียนรู้เสียงสะท้อนของห้องนี้
+    private func echoSpeaking(_ s: Bool) {
+        learnWork?.cancel(); learnWork = nil
+        if s { barged = false; bargeBuf = []; audio.echo.resetRun(); return }
+        guard !barged, !audio.aecEnabled, !audio.outputAirPlay, phase == .live else { return }
+        let w = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            Log.write(self.audio.echo.learn(noise: self.wakeDetector.noiseFloor))
+        }
+        learnWork = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + audio.echo.delay + 0.6, execute: w)
+    }
+
     // ---------- ไมค์ ----------
     private func onMic(_ chunk: Data) {
         switch phase {
         case .live:
             if micMuted { micLevel = 0; return }
-            // ไม่มีตัวตัดเสียงสะท้อน (เช่น เสียงออกลำโพงจอ + ไมค์หูฟัง) → ไมค์จะได้ยิน Friday แล้ววนลูปคุยกับตัวเอง
-            // จึงไม่ส่งเสียงไมค์ระหว่าง Friday พูด + ช่วงหางเสียง 0.8 วิ (AirPlay/HomePod เล่นช้า ~2 วิ → หางยาวขึ้น) แลกกับการพูดแทรกไม่ได้
-            let tail = audio.outputAirPlay ? (config?.airplayEchoTailSec ?? 2.5) : 0.8
-            if (!audio.aecEnabled || audio.outputAirPlay) && (voiceBusy || Date().timeIntervalSince(speakEndedAt) < tail) { micLevel = 0; return }
+            if audio.outputAirPlay {
+                // AirPlay/HomePod เล่นช้า ~2 วิ ไม่แน่นอน → ยังปิดไมค์ระหว่าง Friday พูด + หางเสียง (พูดแทรกไม่ได้)
+                if voiceBusy || Date().timeIntervalSince(speakEndedAt) < (config?.airplayEchoTailSec ?? 2.5) { micLevel = 0; return }
+            } else if !audio.aecEnabled {
+                // ไม่มีตัวตัดเสียงสะท้อน (ลำโพงจอ + ไมค์หูฟัง): EchoGate รู้ว่ากำลังเล่นอะไร → แยกเสียงผู้ใช้ออกจากเสียง Friday ที่สะท้อนกลับ
+                // เสียงสะท้อนล้วน = ทิ้ง (เดิมทิ้งทั้งหมด + หาง 0.8 วิ ซึ่งสั้นไป เสียงสะท้อนหลุดเป็นประโยคเปล่า 9 ต.ค.)
+                audio.echo.heard(chunk)
+                if !barged && (voiceBusy || audio.echo.echoActive()) {
+                    bargeBuf.append(chunk); if bargeBuf.count > 6 { bargeBuf.removeFirst() }
+                    guard audio.echo.isBargeIn(noise: wakeDetector.noiseFloor) else { micLevel = 0; return }
+                    if voiceBusy { bargeIn() } else { barged = true }        // หางเสียงสะท้อน: ไม่มีอะไรต้องหยุด แค่ปล่อยไมค์ผ่าน
+                    for c in bargeBuf.dropLast() { live?.sendAudio(c) }     // ส่งต้นประโยคที่พูดแทรกด้วย
+                    bargeBuf = []
+                } else if !bargeBuf.isEmpty { bargeBuf = [] }
+            }
             micLevel = WakeDetector.rms(chunk)
             live?.sendAudio(chunk)
         case .connecting: if !micMuted { connectQueue.append(chunk) }
@@ -380,6 +421,7 @@ final class FridayController: ObservableObject {
         sessionStart = nil
         micMuted = false
         ending = false; userTurn = ""
+        barged = false; bargeBuf = []; bargeAt = nil
         lastFri = ""; lastMe = ""; resultLine = ""; awaitingReply = false; friLive = false; doneAt = nil; micLevel = 0; outLevel = 0; confirms = [:]; pendingConfirm = nil; muteAfterEnd = false
         live?.close(); live = nil
         ttsCancel()
@@ -411,6 +453,7 @@ final class FridayController: ObservableObject {
             ttsCancel()
             audio.flush()
         case .inputText(let t):
+            bargeAt = nil
             let newTurn = meIndex == nil
             if let i = meIndex { messages[i].text += t } else { messages.append(.init(kind: .me, text: t)); meIndex = messages.count - 1 }
             if newTurn { lastMe = t; resultLine = "" } else { lastMe += t }

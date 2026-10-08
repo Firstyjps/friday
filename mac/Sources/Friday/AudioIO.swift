@@ -44,6 +44,8 @@ final class AudioIO {
     private var observers: [(engine: AVAudioEngine, token: NSObjectProtocol)] = []
 
     private var vpUnsupported = false                 // ลอง voice processing แล้วไม่ได้ → ไม่ลองซ้ำจนกว่าจะเปิดแอปใหม่
+    private var vpio: VPIOUnit?                       // ตัวตัดเสียงสะท้อนแบบ AudioUnit ตรง (ใช้เมื่อแบบ AVAudioEngine เปิดไม่ได้)
+    private var vpioUnsupported = false
     private var benchedInputs: [String: Date] = [:]   // ไมค์ที่เงียบสนิท (ไมค์ MacBook ตอนปิดฝา) → พักไว้ชั่วคราว
     private var zeroSince: Date?
     private var building = false
@@ -87,6 +89,13 @@ final class AudioIO {
             catch { vpUnsupported = true; Log.write("audio: voice processing ใช้ไม่ได้ (\((error as NSError).code)) → แยกไมค์/ลำโพง") }
         }
 
+        // ตัวตัดเสียงสะท้อนแบบ AudioUnit ตรง: เปิดได้แม้ไมค์/ลำโพงคนละตัว (ไมค์หูฟัง + ลำโพงจอ) → พูดแทรกได้ ไม่ได้ยินเสียงตัวเอง
+        // AirPlay/HomePod ไม่ใช้ (เสียงหน่วง ~2 วิ เกินที่ตัวตัดเสียงสะท้อนรับได้)
+        if !vpioUnsupported, !outs[0].airplay {
+            do { try buildVPIO(out: outs[0], inp: ins[0]); return }
+            catch { vpioUnsupported = true; Log.write("audio: VoiceProcessingIO ใช้ไม่ได้ (\((error as NSError).code)) → แยกไมค์/ลำโพง") }
+        }
+
         // ลำโพง: ตัวแรกที่เปิดได้
         var outOK: AudioDevice?
         for d in outs {
@@ -108,7 +117,7 @@ final class AudioIO {
 
     private func started(out: String, inp: String) {
         outputName = out; inputName = inp
-        echo.use(output: out, input: inp)
+        echo.use(output: aecEnabled ? "\(out) ·aec" : out, input: inp, defaultGain: aecEnabled ? 0.15 : 0.6)
         Log.write("audio: 🔊 \(out) · 🎤 \(inp) · aec=\(aecEnabled) · airplay=\(outputAirPlay)")
         onDevicesChanged?()
     }
@@ -131,6 +140,24 @@ final class AudioIO {
         resetPlayback(); observe(e)
         aecEnabled = true
         outputAirPlay = out.airplay
+        started(out: out.name, inp: inp.name)
+    }
+
+    private func buildVPIO(out: AudioDevice, inp: AudioDevice) throws {
+        teardownAll()
+        let v = try VPIOUnit(input: inp.id, output: out.id)
+        let conv = AVAudioConverter(from: v.format, to: micFormat)
+        micQueue.sync { converter = conv; micBuffer.removeAll() }
+        v.onMic = { [weak self] buf in self?.micQueue.async { self?.convertAndEmit(buf) } }
+        v.onDrained = { [weak self, weak v] in
+            DispatchQueue.main.async { if let self, let v, self.vpio === v, v.queued == 0 { self.pending = 0 } }
+        }
+        try v.start()
+        vpio = v; zeroSince = nil
+        resetPlayback()
+        aecEnabled = true
+        outputAirPlay = false
+        Log.write("audio: ตัดเสียงสะท้อนด้วย VoiceProcessingIO")
         started(out: out.name, inp: inp.name)
     }
 
@@ -186,6 +213,7 @@ final class AudioIO {
     }
 
     private func teardownAll() {
+        vpio?.stop(); vpio = nil
         observers.forEach { NotificationCenter.default.removeObserver($0.token) }; observers = []
         inEngine.stop(); inEngine.inputNode.removeTap(onBus: 0)
         outEngine.stop()
@@ -261,7 +289,7 @@ final class AudioIO {
     }
 
     // ---------- ไมค์ ----------
-    var inputRunning: Bool { inEngine.isRunning }
+    var inputRunning: Bool { vpio != nil || inEngine.isRunning }
     private(set) var tapCount = 0, convFail = 0     // debug: ไมค์ส่ง buffer มากี่ก้อน / แปลงไม่สำเร็จกี่ก้อน
     private func convertAndEmit(_ buf: AVAudioPCMBuffer) {
         tapCount += 1
@@ -292,7 +320,7 @@ final class AudioIO {
         for i in 0..<Int(buf.frameLength) { peak = max(peak, abs(ch[i])) }
         if peak > 0 { zeroSince = nil; return }
         let since = zeroSince ?? Date(); zeroSince = since
-        guard Date().timeIntervalSince(since) > 4 else { return }
+        guard Date().timeIntervalSince(since) > (vpio != nil ? 30 : 4) else { return }   // ตัวตัดเสียงรบกวนอาจกดเงียบนานกว่า
         zeroSince = nil
         DispatchQueue.main.async { [weak self] in
             guard let self, !self.building else { return }
@@ -319,6 +347,11 @@ final class AudioIO {
 
     @discardableResult
     private func schedule(_ buf: AVAudioPCMBuffer) -> Bool {
+        if let vpio {
+            vpio.enqueue(UnsafeBufferPointer(start: buf.floatChannelData![0], count: Int(buf.frameLength)))
+            if pending == 0 { pending = 1 }               // VPIO: กำลังพูด = คิวยังไม่หมด (onDrained ตั้งกลับเป็น 0)
+            return true
+        }
         guard outEngine.isRunning else { return false }
         pending += 1
         let gen = generation
@@ -348,6 +381,7 @@ final class AudioIO {
 
     /// ผู้ใช้พูดแทรก → หยุดเสียงที่ค้างในคิวทันที
     func flush() {
+        if let vpio { vpio.clear(); generation += 1; pending = 0; echo.flushed(); return }
         generation += 1
         player.stop()
         echo.flushed()

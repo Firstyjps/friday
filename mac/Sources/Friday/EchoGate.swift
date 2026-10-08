@@ -95,6 +95,8 @@ final class EchoGate {
     /// ผู้ใช้พูดแทรกไหม: 0.3 วิล่าสุด พลังงานไมค์มากกว่าเสียงสะท้อนที่ควรได้ยิน ≥2 เท่า (+เสียงพื้น) ติดกัน 2 ครั้ง (~0.4 วิ)
     /// เทียบพลังงานรวม ไม่ใช่ทีละช่วง: เสียงคนแทรกเข้ามาตามช่องว่างระหว่างพยางค์ของ Friday
     func isBargeIn(noise: Double, at end: TimeInterval = EchoGate.now) -> Bool {
+        // ยังไม่เคยวัดห้อง (อุปกรณ์คู่ใหม่ / ตัวตัดเสียงสะท้อนเพิ่งเริ่มยังไม่ปรับตัว) → ไม่ให้แทรก ฟัง Friday ให้จบก่อน 1 ครั้ง
+        guard learned > 0 else { voiceRun = 0; return false }
         let recent = mic.filter { $0.t >= end - 0.3 - 0.001 }
         guard recent.count >= 10 else { voiceRun = 0; return false }
         var eMic = 0.0, eEcho = 0.0, loud = 0
@@ -173,14 +175,14 @@ final class EchoGate {
     }
 
     // ---------- จำค่าตามคู่อุปกรณ์ ----------
-    func use(output: String, input: String) {
+    func use(output: String, input: String, defaultGain: Double = 0.6) {
         let k = "echo.\(output)|\(input)"
         guard k != key else { return }
         key = k
         out = []; mic = []; voiceRun = 0
         if let d = UserDefaults.standard.dictionary(forKey: k), let dl = d["delay"] as? Double, let g = d["gain"] as? Double {
             delay = dl; gain = g; learned = d["n"] as? Int ?? 1
-        } else { delay = 0.12; gain = 0.6; learned = 0 }
+        } else { delay = 0.12; gain = defaultGain; learned = 0 }
     }
     private func save() { UserDefaults.standard.set(["delay": delay, "gain": gain, "n": learned], forKey: key) }
 }

@@ -205,7 +205,7 @@ final class FridayController: ObservableObject {
     private func echoSpeaking(_ s: Bool) {
         learnWork?.cancel(); learnWork = nil
         if s { barged = false; bargeBuf = []; audio.echo.resetRun(); return }
-        guard !barged, !audio.aecEnabled, !audio.outputAirPlay, phase == .live else { return }
+        guard !barged, !audio.outputAirPlay, !audio.aecEnabled || live is CascadeSession, phase == .live else { return }
         let w = DispatchWorkItem { [weak self] in
             guard let self else { return }
             Log.write(self.audio.echo.learn(noise: self.wakeDetector.noiseFloor))
@@ -222,13 +222,14 @@ final class FridayController: ObservableObject {
             if audio.outputAirPlay {
                 // AirPlay/HomePod เล่นช้า ~2 วิ ไม่แน่นอน → ยังปิดไมค์ระหว่าง Friday พูด + หางเสียง (พูดแทรกไม่ได้)
                 if voiceBusy || Date().timeIntervalSince(speakEndedAt) < (config?.airplayEchoTailSec ?? 2.5) { micLevel = 0; return }
-            } else if !audio.aecEnabled {
+            } else if !audio.aecEnabled || live is CascadeSession {
                 // ไม่มีตัวตัดเสียงสะท้อน (ลำโพงจอ + ไมค์หูฟัง): EchoGate รู้ว่ากำลังเล่นอะไร → แยกเสียงผู้ใช้ออกจากเสียง Friday ที่สะท้อนกลับ
                 // เสียงสะท้อนล้วน = ทิ้ง (เดิมทิ้งทั้งหมด + หาง 0.8 วิ ซึ่งสั้นไป เสียงสะท้อนหลุดเป็นประโยคเปล่า 9 ต.ค.)
                 audio.echo.heard(chunk)
                 // พูดแทรกปิดไว้ (config.bargeIn): 9 ต.ค. ไมค์ได้ยิน Friday ดังเกือบเท่าเสียงที่ส่งออก (gain 0.82) → คิดว่า Friday เป็นผู้ใช้ แล้วคุยกับตัวเองวน
                 // → ปิดไมค์ระหว่าง Friday พูด + หางเสียงอย่างน้อย 0.8 วิ (ตามความหน่วงที่วัดได้) เหมือนเดิม · EchoGate ยังเรียนรู้ค่าไว้
-                if config?.bargeIn != true {
+                let canBarge = audio.aecEnabled || config?.bargeIn == true || (config?.bargeInOutputs ?? ["Headphones", "AirPods", "หูฟัง"]).contains { audio.outputName.localizedCaseInsensitiveContains($0) }
+                if !canBarge {
                     if voiceBusy || Date().timeIntervalSince(speakEndedAt) < max(0.8, audio.echo.delay + 0.6) { micLevel = 0; return }
                 } else if !barged && (voiceBusy || audio.echo.echoActive()) {
                     bargeBuf.append(chunk); if bargeBuf.count > 6 { bargeBuf.removeFirst() }

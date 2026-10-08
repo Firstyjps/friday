@@ -169,6 +169,7 @@ public func fridayMain() {
     MainActor.assumeIsolated {
         if CommandLine.arguments.contains("--selftest") { SelfTest.run(); RunLoop.main.run() }
         if CommandLine.arguments.contains("--overlay-demo") { OverlayDemo.run(); NSApplication.shared.run() }
+        if CommandLine.arguments.contains("--vp-test") { NSApplication.shared.setActivationPolicy(.accessory); VPTest.run(); NSApplication.shared.run() }
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate

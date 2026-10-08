@@ -18,7 +18,8 @@ struct WakeDetector {
     /// ป้อน 1 chunk → คืน clip เมื่อจบช่วงพูดที่ยาวพอ (ไม่งั้น nil)
     mutating func feed(_ chunk: Data) -> [Data]? {
         let level = Self.rms(chunk); frames += 1; peak = max(peak, level)
-        let isSpeech = level > max(noiseFloor * 3, Self.minSpeechLevel)
+        // ห้องมีเสียง (เพลง/ทีวี) noise ขึ้นไป 3000+ → ×3 ต้องดัง 10000 ถึงนับเป็นเสียงพูด = ไม่ได้ยินผู้ใช้เลย (8 ต.ค.) · เพดานไว้ที่ noise+1500
+        let isSpeech = level > max(min(noiseFloor * 3, noiseFloor + 1500), Self.minSpeechLevel)
         if !isSpeech && seg.isEmpty {
             noiseFloor = noiseFloor * 0.95 + level * 0.05
             preroll.append(chunk); if preroll.count > Self.prerollChunks { preroll.removeFirst() }

@@ -255,9 +255,10 @@ async function detectWake(pcm) {
   const form = new FormData();
   form.append('file', new Blob([pcmToWav(pcm)], { type: 'audio/wav' }), 'clip.wav');
   form.append('response_format', 'json');
+  form.append('prompt', 'Friday ฟรายเดย์');   // คำใบ้ → ถอดคำปลุกถูกขึ้นตอนมีเสียงรบกวน (ทดสอบ 8 ต.ค.: ไม่ทำให้ปลุกมั่วกับเงียบ/ดนตรี/เสียงพูดอื่น)
   const r = await fetch(WHISPER, { method: 'POST', body: form, signal: AbortSignal.timeout(8000) });
   const text = ((await r.json()).text || '').trim();
-  const m = text.match(WAKE);
+  const m = text.replace(/\[[^\]]*\]|\([^)]*\)/g, ' ').trim().match(WAKE);   // ตัด [เสียงดนตรี] ที่ whisper ใส่หน้าคำปลุกตอนมีเพลง
   return { text, wake: !!m, phrase: m ? m[0].trim() : '' };
 }
 
@@ -323,7 +324,7 @@ function startEar() {
   function vad(chunk) {
     let s = 0; for (let i = 0; i < chunk.length; i += 2) { const v = chunk.readInt16LE(i); s += v * v; }
     const level = Math.sqrt(s / (chunk.length / 2)); frames++; if (level > peak) peak = level;
-    const speech = level > Math.max(noise * 3, 400);
+    const speech = level > Math.max(Math.min(noise * 3, noise + 1500), 400);   // เพดานเดียวกับแอป (ห้องมีเพลง)
     if (!speech && !seg.length) { noise = noise * 0.95 + level * 0.05; pre.push(chunk); if (pre.length > 3) pre.shift(); return; }
     if (!seg.length) seg.push(...pre.splice(0));
     seg.push(chunk);

@@ -46,7 +46,7 @@ final class CascadeSession: LiveSession {
         guard !closed else { return }
         if busy { resetVAD(); return }                 // half-duplex: ระหว่าง Friday คิด/พูด ไม่รับเสียง
         let level = WakeDetector.rms(pcm16k)
-        let isSpeech = level > max(noiseFloor * 3, Self.minSpeech)
+        let isSpeech = level > max(min(noiseFloor * 3, noiseFloor + 1500), Self.minSpeech)
         if !isSpeech && seg.isEmpty {
             noiseFloor = noiseFloor * 0.95 + level * 0.05
             preroll.append(pcm16k); if preroll.count > Self.prerollChunks { preroll.removeFirst() }

@@ -56,6 +56,7 @@ final class FridayController: ObservableObject {
     @Published var wokeAt: Date?                  // one-shot: แสงไล่ตามขอบตอนปลุก (0.9 วิ)
     @Published var doneAt: Date?                  // one-shot: แถว "เสร็จแล้ว" + แสงแตกจากกลางคลื่น (2.6 วิ)
     @Published var doneText = ""
+    private var friLive = false                   // Friday กำลังตอบรอบนี้อยู่ (ถึง turnComplete) — ข้อความผู้ใช้ที่มาช้ากว่า (Scribe) ต้องไม่ล้างคำตอบ
     @Published var awaitingReply = false          // cascade: ผู้ใช้พูดจบแล้ว รอ Friday คิด → overlay โหมด "กำลังคิด"
     private let convo = UUID().uuidString          // หนึ่งรอบเปิดแอป = หนึ่ง Claude session (จำงานก่อนหน้าได้)
 
@@ -379,7 +380,7 @@ final class FridayController: ObservableObject {
         sessionStart = nil
         micMuted = false
         ending = false; userTurn = ""
-        lastFri = ""; lastMe = ""; resultLine = ""; awaitingReply = false; doneAt = nil; micLevel = 0; outLevel = 0; confirms = [:]; pendingConfirm = nil; muteAfterEnd = false
+        lastFri = ""; lastMe = ""; resultLine = ""; awaitingReply = false; friLive = false; doneAt = nil; micLevel = 0; outLevel = 0; confirms = [:]; pendingConfirm = nil; muteAfterEnd = false
         live?.close(); live = nil
         ttsCancel()
         audio.flush()
@@ -412,8 +413,9 @@ final class FridayController: ObservableObject {
         case .inputText(let t):
             let newTurn = meIndex == nil
             if let i = meIndex { messages[i].text += t } else { messages.append(.init(kind: .me, text: t)); meIndex = messages.count - 1 }
-            if newTurn { lastMe = t; lastFri = ""; resultLine = "" } else { lastMe += t }   // ผู้ใช้เริ่มพูดใหม่ → overlay กลับไปโหมดฟัง
-            if live is CascadeSession { awaitingReply = true }    // cascade ได้ข้อความตอนพูดจบแล้วเท่านั้น (Gemini Live ถอดระหว่างพูด)
+            if newTurn { lastMe = t; resultLine = "" } else { lastMe += t }
+            // cascade: Gemini มักตอบก่อน Scribe ถอดเสร็จ (2.0 vs 2.9 วิ) → ถ้า Friday เริ่มตอบแล้ว ห้ามล้างคำตอบ (9 ต.ค. ข้อความ Friday หาย)
+            if newTurn, !friLive { lastFri = ""; if live is CascadeSession { awaitingReply = true } }
             friIndex = nil
             userTurn += t
             userSpoke = true
@@ -422,18 +424,19 @@ final class FridayController: ObservableObject {
             }
         case .inputPartial(let t):
             // โชว์บน overlay อย่างเดียว — ไม่แตะ userTurn/userSpoke/คำยืนยัน (ด่านความปลอดภัยใช้ข้อความจริงจาก Scribe)
-            if meIndex == nil, friIndex == nil, !speaking { lastMe = t; lastFri = ""; resultLine = "" }
+            if meIndex == nil, !friLive, !speaking { lastMe = t; lastFri = ""; resultLine = "" }
         case .outputText(let t):
             awaitingReply = false
             if muteAfterEnd { Log.write("ev: drop text after end: \(t.prefix(30))"); return }
             if friIndex == nil { Log.write("ev: fri-start (prev fri=\(friTurn.count) chars)") }
             friTurn += t; friSpoke = true
-            lastFri = friIndex == nil ? t : lastFri + t
+            lastFri = friLive ? lastFri + t : t
+            friLive = true
             if let i = friIndex { messages[i].text += t } else { messages.append(.init(kind: .fri, text: t)); friIndex = messages.count - 1 }
             meIndex = nil
             if ttsOn { ttsBuf += t; ttsFlush(final: false) }
         case .turnComplete:
-            awaitingReply = false
+            awaitingReply = false; friLive = false
             if ttsOn { ttsFlush(final: true) }
             Log.write("ev: turnComplete user=\(userTurn.count) fri=\(friTurn.count)")
             // บันทึกบทสนทนาที่คุยกับ Friday จริง (หลังปลุกแล้วเท่านั้น — เสียงที่ได้ยินทั่วไปไม่ถูกบันทึก)

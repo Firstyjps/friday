@@ -69,6 +69,7 @@ final class AudioIO {
         if !listening {
             listening = true
             AudioDevices.onChange { [weak self] in self?.scheduleReselect() }
+            startWatchdog()
         }
         building = true; defer { building = false }
         benchedInputs = benchedInputs.filter { $0.value > Date() }
@@ -233,6 +234,27 @@ final class AudioIO {
             Log.write("audio: อุปกรณ์เปลี่ยน → ใช้ \(bestOut ?? "-") / \(bestIn ?? "-")")
         }
         do { try start() } catch { Log.write("audio: เลือกใหม่ไม่สำเร็จ \(error)"); onFailure?() }
+    }
+
+    // ---------- ตัวเฝ้าไมค์ค้าง ----------
+    // 9 ต.ค.: ไมค์ส่งเสียงได้ ~1–2 นาทีแล้วเงียบไปเฉยๆ (engine ยังบอกว่าวิ่งอยู่ ไม่มี error) ตอนเสียงออก AirPlay → แอปไม่ได้ยินอะไรเลย
+    // ไม่รู้สาเหตุแน่ชัด จึงเฝ้า: ถ้าไม่มี buffer จากไมค์เกิน 4 วิ → สร้าง engine ไมค์ใหม่ (ไม่แตะลำโพง เสียงที่กำลังพูดไม่ขาด)
+    private var lastTap = -1, stalledSec = 0, restarts = 0
+    private func startWatchdog() {
+        Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            guard let self, !self.building, !self.inputPaused else { self?.stalledSec = 0; return }
+            let now = self.tapCount
+            if now == self.lastTap { self.stalledSec += 2 } else { self.stalledSec = 0; self.lastTap = now }
+            guard self.stalledSec >= 4 else { return }
+            self.stalledSec = 0; self.restarts += 1
+            Log.write("audio: ไมค์ค้าง (ไม่มีเสียงเข้า 4 วิ, ครั้งที่ \(self.restarts)) → เปิดไมค์ใหม่")
+            self.restartInput()
+        }
+    }
+
+    private func restartInput() {
+        guard !aecEnabled, let d = AudioDevices.candidates(input: true, priority: inputPriority, skip: Set(benchedInputs.keys)).first else { reselect(force: true); return }
+        do { try buildInput(d); inputName = d.name } catch { Log.write("audio: เปิดไมค์ใหม่ไม่ได้ \(error) → เลือกอุปกรณ์ใหม่"); reselect(force: true) }
     }
 
     // ---------- ไมค์ ----------

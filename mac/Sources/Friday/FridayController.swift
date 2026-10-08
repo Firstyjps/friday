@@ -227,7 +227,7 @@ final class FridayController: ObservableObject {
                 sessionStart = Date()
                 userSpoke = false; friSpoke = false
                 pendingGreeting = greet
-                attach(cascade ? CascadeSession() : LiveSession(), token: token, extra: extra, resumeHandle: nil)
+                attach(cascade ? CascadeSession(noise: wakeDetector.noiseFloor) : LiveSession(), token: token, extra: extra, resumeHandle: nil)
             } catch {
                 sys("⚠️ เชื่อมต่อไม่ได้: \(error.localizedDescription)")
                 endSession()

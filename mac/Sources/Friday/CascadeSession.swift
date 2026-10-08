@@ -15,10 +15,13 @@ final class CascadeSession: LiveSession {
     private var current: Task<Void, Never>?
 
     // ---- VAD: ตัดช่วงพูด (PCM16 16k ทีละ 100ms) ----
-    private var noiseFloor = 300.0
+    private var noiseFloor: Double
     private var seg: [Data] = [], preroll: [Data] = []
     private var voiced = 0, silent = 0
     private static let minSpeech = 400.0, prerollChunks = 3, endSilence = 7, maxChunks = 300, minVoiced = 3
+
+    /// noise = ระดับเสียงพื้นหลังที่หูคำปลุกเรียนรู้มาแล้ว (เริ่ม 300 แบบเดิม → เกณฑ์ 900 สูงไป ประโยคต่อจากคำปลุกหาย 8 ต.ค.)
+    init(noise: Double) { noiseFloor = min(max(noise, 50), 300); super.init() }
 
     override func connect(token: String, config: ServerAPI.Config, extraSystem: String = "", resumeHandle: String? = nil) {
         Task { @MainActor in

@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// Friday — แอป menu bar (ไม่มีไอคอนใน Dock)
@@ -8,7 +9,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let controller = FridayController()
     private var statusItem: NSStatusItem!
     private var panel: NSPanel!          // หน้าต่าง history (เปิดจากเมนู)
-    private var overlay: NSPanel!        // Island overlay กลางขอบบนจอ (โผล่เฉพาะตอนคุย)
+    private var overlay: OverlayPanel!   // Edge Wave overlay ขอบขวาของจอ (โผล่เฉพาะตอนคุย)
+    private let overlayUI = OverlayUI()
+    private var mouseTimer: Timer?
+    private var keyMonitor: Any?
+    private var confirmSub: AnyCancellable?
     private var hotKey: HotKey?
 
     func applicationDidFinishLaunching(_ n: Notification) {
@@ -29,16 +34,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.contentView = NSHostingView(rootView: PanelView(c: controller))
         placePanel()
 
-        overlay = NSPanel(contentRect: NSRect(x: 0, y: 0, width: OverlayView.width, height: OverlayView.height),
-                          styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        overlay = OverlayPanel(contentRect: NSRect(x: 0, y: 0, width: OverlayView.width, height: 600),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         overlay.isOpaque = false
         overlay.backgroundColor = .clear
-        overlay.hasShadow = false                       // เงาวาดใน SwiftUI ตามขนาดจริงของการ์ด
+        overlay.hasShadow = false                       // ม่าน/แสงวาดใน SwiftUI
         overlay.isFloatingPanel = true
         overlay.level = .floating
         overlay.hidesOnDeactivate = false
         overlay.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
-        overlay.contentView = NSHostingView(rootView: OverlayView(c: controller))
+        overlay.ignoresMouseEvents = true               // พื้นที่โปร่ง/ม่านต้องคลิกทะลุ — เปิดรับคลิกเฉพาะตอนเมาส์อยู่บนแผง (ดู trackMouse)
+        overlay.contentView = NSHostingView(rootView: OverlayView(c: controller, ui: overlayUI))
+        // ↩ = ยืนยัน · esc = ยกเลิก — เฉพาะตอนแผงยืนยันเป็น key (ผู้ใช้คลิกที่แผงแล้ว) ไม่ดักคีย์ทั้งระบบ กันกด Enter ในแอปอื่นแล้วเผลอยืนยัน
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            guard let self, e.window === self.overlay, let p = self.controller.pendingConfirm else { return e }
+            switch e.keyCode {
+            case 36, 76: Task { await self.controller.decide(p.jobId, approve: true, via: "ปุ่ม") }
+            case 53: Task { await self.controller.decide(p.jobId, approve: false, via: "ปุ่ม") }
+            default: return e
+            }
+            return nil
+        }
+        confirmSub = controller.$pendingConfirm.map { $0 != nil }.removeDuplicates().sink { [weak self] on in
+            guard let self else { return }
+            self.overlay.allowKey = on
+            if !on, self.overlay.isKeyWindow { NSWorkspace.shared.frontmostApplication?.activate() }   // คืนคีย์บอร์ดให้แอปที่ใช้อยู่
+        }
 
         controller.onPhaseChanged = { [weak self] p in self?.updateIcon(p); self?.buildMenu() }
         controller.onWantsPanel = { [weak self] show in self?.showOverlay(show) }
@@ -75,14 +96,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if show { panel.orderFrontRegardless() } else { panel.orderOut(nil) }
     }
 
-    /// overlay: กลางขอบบนของจอหลัก ใต้ menu bar
+    /// overlay: ชิดขอบขวาของจอหลัก กว้าง 560 สูงเต็ม visibleFrame (ใต้ menu bar) — เนื้อหาอยู่กลางแนวตั้ง
     private func showOverlay(_ show: Bool) {
         if show {
             if let screen = NSScreen.main?.visibleFrame {
-                overlay.setFrameOrigin(NSPoint(x: screen.midX - OverlayView.width / 2, y: screen.maxY - OverlayView.height - 6))
+                overlay.setFrame(NSRect(x: screen.maxX - OverlayView.width, y: screen.minY, width: OverlayView.width, height: screen.height), display: true)
             }
+            overlayUI.windowFrame = overlay.frame
             overlay.orderFrontRegardless()
-        } else { overlay.orderOut(nil) }
+            if mouseTimer == nil {
+                mouseTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.trackMouse() }
+                }
+            }
+        } else {
+            overlay.orderOut(nil)
+            mouseTimer?.invalidate(); mouseTimer = nil
+            overlay.ignoresMouseEvents = true
+        }
+        if overlayUI.visible != show { overlayUI.visible = show }
+    }
+
+    /// รับคลิกเฉพาะตอนเมาส์อยู่บนแผงที่โชว์อยู่ — ที่เหลือคลิกทะลุไปแอปข้างใต้ (ม่านไม่บังการใช้งาน)
+    private func trackMouse() {
+        let r = overlayUI.panelRect, f = overlay.frame
+        let onPanel = !r.isEmpty && NSRect(x: f.minX + r.minX, y: f.maxY - r.maxY, width: r.width, height: r.height)
+            .insetBy(dx: -8, dy: -8).contains(NSEvent.mouseLocation)
+        if overlay.ignoresMouseEvents == onPanel { overlay.ignoresMouseEvents = !onPanel }
+        if !onPanel, overlayUI.hover != nil { overlayUI.hover = nil }
     }
 
     private func updateIcon(_ p: FridayController.Phase) {
@@ -127,10 +168,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 public func fridayMain() {
     MainActor.assumeIsolated {
         if CommandLine.arguments.contains("--selftest") { SelfTest.run(); RunLoop.main.run() }
+        if CommandLine.arguments.contains("--overlay-demo") { OverlayDemo.run(); NSApplication.shared.run() }
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate
         app.setActivationPolicy(.accessory)
         withExtendedLifetime(delegate) { app.run() }
     }
+}
+
+/// overlay เป็น key ได้เฉพาะตอนมีแผงยืนยัน (ให้ ↩/esc ใช้ได้หลังคลิกแผง) — ปกติกดปุ่มแล้วไม่แย่งคีย์บอร์ดจากแอปที่ใช้อยู่
+final class OverlayPanel: NSPanel {
+    var allowKey = false
+    override var canBecomeKey: Bool { allowKey }
 }

@@ -459,9 +459,11 @@ const serverTools = {
   },
   system_info: async () => {
     const now = new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok', dateStyle: 'full', timeStyle: 'short' });
-    const df = (await sh('/bin/df', ['-h', '/'])).split('\n')[1]?.split(/\s+/) ?? [];
+    // APFS: "/" คือ volume ระบบ (ใช้แค่ ~12GB → เคยตอบ 6% ผิด 8 ต.ค.) · ทั้งดิสก์ = ขนาด container − ที่ว่าง
+    const k = (await sh('/bin/df', ['-k', '/'])).split('\n')[1]?.split(/\s+/) ?? [];
+    const gb = (kb) => `${Math.round(kb / 1024 / 1024)}GB`;
     const batt = (await sh('/usr/bin/pmset', ['-g', 'batt'])).match(/(\d+)%;\s*([\w ]+)/);
-    return { ok: true, datetime: now, disk: df.length > 4 ? `ทั้งหมด ${df[1]} ใช้ไป ${df[2]} เหลือ ${df[3]} (${df[4]})` : 'ไม่ทราบ',
+    return { ok: true, datetime: now, disk: k.length > 4 ? `ทั้งหมด ${gb(+k[1])} ใช้ไป ${gb(+k[1] - +k[3])} เหลือ ${gb(+k[3])} (ใช้ไป ${Math.round((1 - +k[3] / +k[1]) * 100)}%)` : 'ไม่ทราบ',
              battery: batt ? `${batt[1]}% (${batt[2].trim()})` : 'ไม่มีข้อมูล', uptime: (await sh('/usr/bin/uptime', [])).trim() };
   },
   // Apple Shortcuts (คุมบ้านผ่าน HomePod mini / Apple Home) — เฉพาะชื่อใน config.shortcutsAllowed

@@ -296,25 +296,43 @@ final class FridayController: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { tick() }
     }
 
-    /// ตัดข้อความเป็นช่วงที่จบวลี (เว้นวรรค/เครื่องหมาย) แล้วส่งไปทำเสียง · ช่วงแรกของ turn สั้นหน่อยให้ได้ยินเร็ว
-    private func ttsFlush(final: Bool) {
+    /// ตัดข้อความเป็นช่วงที่จบวลี (เว้นวรรค/เครื่องหมาย) แล้วส่งไปทำเสียง
+    /// ข้อความถอดเสียงของ Gemini มาตามจังหวะพูด (~15 ตัว/วิ) → ช่วงแรกสั้นมาก (ElevenLabs ~1 วิ) ให้ได้ยินเร็ว
+    /// ช่วงถัดไปยาวขึ้น ทำเสียงระหว่างที่ช่วงก่อนกำลังเล่น · ข้อความหยุดมา 0.35 วิ = ส่งที่ค้างไปเลย
+    private var ttsIdle: DispatchWorkItem?
+    private func ttsFlush(final: Bool, force: Bool = false) {
+        ttsIdle?.cancel(); ttsIdle = nil
         while true {
             let text: String
             if final {
                 text = ttsBuf; ttsBuf = ""
             } else {
-                let minLen = ttsFirst ? 18 : 70
-                guard ttsBuf.count >= minLen,
-                      let cut = ttsBuf.lastIndex(where: { $0 == " " || ".!?…\n".contains($0) }),
-                      ttsBuf.distance(from: ttsBuf.startIndex, to: cut) >= minLen / 2 else { return }
-                let end = ttsBuf.index(after: cut)
-                text = String(ttsBuf[..<end]); ttsBuf = String(ttsBuf[end...])
+                let minLen = ttsFirst ? 10 : 45
+                let cutAt = ttsBuf.lastIndex(where: { $0 == " " || ".!?…\n".contains($0) })
+                if force, ttsBuf.count >= 6 {
+                    let end = cutAt.map { ttsBuf.index(after: $0) } ?? ttsBuf.endIndex
+                    let head = ttsBuf.distance(from: ttsBuf.startIndex, to: end) >= 6 ? end : ttsBuf.endIndex
+                    text = String(ttsBuf[..<head]); ttsBuf = String(ttsBuf[head...])
+                } else {
+                    guard ttsBuf.count >= minLen, let cut = cutAt,
+                          ttsBuf.distance(from: ttsBuf.startIndex, to: cut) >= minLen / 2 else { break }
+                    let end = ttsBuf.index(after: cut)
+                    text = String(ttsBuf[..<end]); ttsBuf = String(ttsBuf[end...])
+                }
             }
             let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !t.isEmpty { ttsSpeak(t) }
+            if !t.isEmpty { ttsSpeak(t); ttsFirst = false }
             if final { ttsFirst = true; return }
-            ttsFirst = false
+            if force { break }
         }
+        guard !ttsBuf.isEmpty else { return }
+        let gen = ttsGen
+        let w = DispatchWorkItem { [weak self] in
+            guard let self, gen == self.ttsGen, !self.ttsBuf.isEmpty else { return }
+            self.ttsFlush(final: false, force: true)
+        }
+        ttsIdle = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: w)
     }
 
     private func ttsSpeak(_ text: String) {
@@ -324,6 +342,7 @@ final class FridayController: ObservableObject {
         ttsTail = Task { @MainActor [weak self] in
             await prev?.value
             let pcm = await fetch.value
+            Log.write("tts: เล่น \(text.count) ตัว (\(pcm.map { String(format: "%.1f", Double($0.count) / 48000) } ?? "-")s)")
             guard let self else { return }
             if gen == self.ttsGen, let pcm {
                 self.outLevel = WakeDetector.rms(pcm.prefix(9600))
@@ -334,6 +353,7 @@ final class FridayController: ObservableObject {
     }
 
     private func ttsCancel() {
+        ttsIdle?.cancel(); ttsIdle = nil
         ttsGen += 1; ttsPending = 0; ttsBuf = ""; ttsFirst = true; ttsTail = nil
     }
 

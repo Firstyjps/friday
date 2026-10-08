@@ -171,7 +171,7 @@ enum ServerAPI {
     static func usageLine() async -> String? {
         guard let data = try? await request("/api/usage"),
               let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        return "เดือนนี้ \(o["minutes"] ?? 0) นาที · ≈ ฿\(o["thb"] ?? 0) ($\(o["usd"] ?? 0))"
+        return "วันนี้ ฿\(o["todayThb"] ?? 0) · เดือนนี้ ฿\(o["thb"] ?? 0) (คาด ฿\(o["projectedMonthThb"] ?? 0))"
     }
 
     static func ping(_ info: [String: Any]) async {

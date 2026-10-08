@@ -408,15 +408,28 @@ async function vaultLookup(query) {
 }
 
 async function usageSummary() {
+  // แถว cascade มี usd คิดไว้แล้ว (ราคาตามโมเดลจริง) · แถว Live (แอป/เว็บรายงาน token) คิดด้วย cfg.pricing
   const cfg = JSON.parse(await readText(join(PUBLIC, 'config.json')) || '{}');
   const p = cfg.pricing ?? { inText: 0.75, inAudio: 3, outText: 4.5, outAudio: 12 };
+  const rate = cfg.usdThb ?? 33.6;
+  const rowUsd = (r) => r.usd ?? ((r.inText || 0) * p.inText + (r.inAudio || 0) * p.inAudio + (r.outText || 0) * p.outText + (r.outAudio || 0) * p.outAudio) / 1e6;
+  const all = (await readText(USAGE)).trim().split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
   const month = today().slice(0, 7);
-  const rows = (await readText(USAGE)).trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((r) => r.date?.startsWith(month));
-  const sum = (k) => rows.reduce((n, r) => n + (r[k] || 0), 0);
-  const usd = (sum('inText') * p.inText + sum('inAudio') * p.inAudio + sum('outText') * p.outText + sum('outAudio') * p.outAudio) / 1e6;
-  const todayUsd = rows.filter((r) => r.date === today()).reduce((n, r) => n + ((r.inText || 0) * p.inText + (r.inAudio || 0) * p.inAudio + (r.outText || 0) * p.outText + (r.outAudio || 0) * p.outAudio) / 1e6, 0);
-  return { month, sessions: rows.length, minutes: +(sum('seconds') / 60).toFixed(1), usd: +usd.toFixed(3), todayUsd: +todayUsd.toFixed(3),
-           thb: Math.round(usd * 33 * 10) / 10, note: 'ประมาณจาก token ที่ Gemini รายงาน (ราคา Gemini 3.1 Flash Live, ไม่มี free tier)' };
+  const rows = all.filter((r) => r.date?.startsWith(month));
+  const byDay = new Map();
+  for (const r of all) { const d = byDay.get(r.date) ?? { usd: 0, turns: 0 }; d.usd += rowUsd(r); if (r.app === 'cascade' && r.kind === 'voice') d.turns++; byDay.set(r.date, d); }
+  const days = [...byDay.entries()].sort((a, b) => b[0].localeCompare(a[0])).slice(0, 7)
+    .map(([date, d]) => ({ date, thb: +(d.usd * rate).toFixed(2), turns: d.turns }));
+  const usd = rows.reduce((n, r) => n + rowUsd(r), 0);
+  const todayUsd = all.filter((r) => r.date === today()).reduce((n, r) => n + rowUsd(r), 0);
+  const dayOfMonth = +today().slice(8, 10), daysInMonth = new Date(+month.slice(0, 4), +month.slice(5, 7), 0).getDate();
+  const sttMin = rows.reduce((n, r) => n + (r.sttSec || 0), 0) / 60;
+  return { month, thb: +(usd * rate).toFixed(1), usd: +usd.toFixed(3), todayThb: +(todayUsd * rate).toFixed(2), todayUsd: +todayUsd.toFixed(4),
+           projectedMonthThb: Math.round(usd * rate / dayOfMonth * daysInMonth), last7days: days,
+           voiceTurnsThisMonth: rows.filter((r) => r.app === 'cascade' && r.kind === 'voice').length,
+           minutes: +(rows.reduce((n, r) => n + (r.seconds || 0), 0) / 60).toFixed(1),
+           scribeMinutes: +sttMin.toFixed(1), scribeFreeMinutes: 270,
+           note: `ค่า Gemini ประมาณจาก token จริงที่ Google รายงาน (บาท = USD×${rate}) · ไม่รวมค่าแผน ElevenLabs · ยอดก่อน 8 ต.ค. (โหมดเก่า) นับไม่ครบ · ยอดจริงดูที่ AI Studio → Spend` };
 }
 
 // ความจำยาวเกิน → ให้ Claude ย่อให้เหลือ ≤ 30 บรรทัด (สำรองไฟล์เดิมเป็น memory.md.bak) — เช็คทุก 6 ชม.
@@ -540,7 +553,8 @@ async function scribe(wav) {          // ถอดเสียงผู้ใช
   if (!r.ok) throw new Error(`scribe ${r.status}: ${(await r.text()).slice(0, 150)}`);
   return (await r.json()).text ?? '';
 }
-const cascade = new Cascade({ key: KEY, log, wav16k: pcmToWav, scribe });
+const recordUsage = (row) => mkdir(DATA, { recursive: true }).then(() => appendFile(USAGE, JSON.stringify({ date: today(), at: new Date().toLocaleTimeString('sv-SE', { timeZone: 'Asia/Bangkok' }), ...row }) + '\n')).catch(() => {});
+const cascade = new Cascade({ key: KEY, log, wav16k: pcmToWav, scribe, record: recordUsage });
 // ทำเสียงประโยคแทรก (กำลังเช็คให้ค่ะ/สักครู่นะคะ/ได้เลยค่ะ) เก็บไว้ตั้งแต่เปิด server → ใช้ครั้งแรกก็ออกทันที
 loadCfg().then((cfg) => { if (cfg.engine === 'cascade' && cfg.cascade?.filler !== false) for (const t of FILLERS) cascade.filler(cfg, t).catch(() => {}); });
 const turnTails = new Map();          // session → promise (ทีละรอบ)

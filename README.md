@@ -55,6 +55,8 @@ launchctl kickstart -k gui/$(id -u)/com.kron.friday            # รีสตา
 tail -f ~/logs/friday.log                                       # WAKE (คำปลุก) / JOB / ping
 tail -f ~/logs/friday-chat.log                                  # บทสนทนากับ Friday (หลังปลุกเท่านั้น)
 npm test                                                        # กฎ RISKY / คำปลุก / allowlist (lib/rules.mjs)
+~/Applications/Friday.app/Contents/MacOS/Friday --overlay-demo   # overlay ขอบขวา: เล่นทุกสถานะด้วยข้อมูลจำลอง (ไม่ใช้ไมค์/server) — Ctrl+C ปิด
+FRIDAY_DEMO_MODE=confirm ~/Applications/Friday.app/Contents/MacOS/Friday --overlay-demo   # ค้างสถานะเดียว: sleep/wake/listen/think/speak/job/confirm/done/muted
 ```
 
 ## หมายเหตุ

@@ -14,7 +14,9 @@ final class CascadeSession: LiveSession {
     private var awaitingTools = false              // server ส่ง done แล้ว รอผลเครื่องมือครบ (กันตอบก่อนได้ tool ครบทุกตัว)
     private var toolResponses: [[String: Any]] = []
     private var current: Task<Void, Never>?
-    private var gen = 0                            // รอบที่ถูกพูดแทรกแล้ว → event ที่ค้างมาทีหลังทิ้ง
+    private var gen = 0
+    /// ตื่นด้วยคำปลุก → คลิปแรกให้ server ยืนยันด้วย Scribe ว่ามีคำปลุกจริง (ไม่มี = ตื่นผิด ปิดเงียบๆ)
+    var wakeCheck = false                            // รอบที่ถูกพูดแทรกแล้ว → event ที่ค้างมาทีหลังทิ้ง
 
     // ---- VAD: ตัดช่วงพูด (PCM16 16k ทีละ 100ms) ----
     private var noiseFloor: Double
@@ -105,7 +107,8 @@ final class CascadeSession: LiveSession {
     // ---------- หนึ่งรอบ ----------
     private func run(audio: Data) {
         Log.write("cascade: ส่งเสียง \(String(format: "%.1f", Double(audio.count) / 32000))s")
-        start(seg: segId) { try await ServerAPI.turn(session: self.id, audio: audio) }
+        let wake = wakeCheck; wakeCheck = false
+        start(seg: segId) { try await ServerAPI.turn(session: self.id, audio: audio, wake: wake) }
     }
 
     private func partial(_ pcm: Data) {
@@ -151,7 +154,9 @@ final class CascadeSession: LiveSession {
                     case "tool":
                         self.pendingTools += 1
                         self.onEvent?(.toolCall(id: o["id"] as? String ?? "", name: o["name"] as? String ?? "", args: o["args"] as? [String: Any] ?? [:]))
-                    case "done": pending = o["pending"] as? Int ?? 0
+                    case "done":
+                        pending = o["pending"] as? Int ?? 0
+                        if o["falseWake"] as? Bool == true { self.onEvent?(.closed("ตื่นผิด — ไม่ได้ยินคำปลุกจริง")); return }
                     case "error": Log.write("cascade: server error \(o["error"] ?? "")")
                     default: break
                     }

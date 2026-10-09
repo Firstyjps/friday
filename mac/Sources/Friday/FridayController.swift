@@ -288,7 +288,9 @@ final class FridayController: ObservableObject {
                 sessionStart = Date()
                 userSpoke = false; friSpoke = false
                 pendingGreeting = greet
-                attach(cascade ? CascadeSession(noise: wakeDetector.noiseFloor) : LiveSession(), token: token, extra: extra, resumeHandle: nil)
+                let session = cascade ? CascadeSession(noise: wakeDetector.noiseFloor) : LiveSession()
+                (session as? CascadeSession)?.wakeCheck = !greet && !prebuffer.isEmpty      // ตื่นจากคำปลุก (ไม่ใช่กดเรียก/คีย์ลัด)
+                attach(session, token: token, extra: extra, resumeHandle: nil)
             } catch {
                 sys("⚠️ เชื่อมต่อไม่ได้: \(error.localizedDescription)")
                 endSession()

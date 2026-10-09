@@ -765,6 +765,7 @@ http.createServer(async (req, res) => {
         const session = url.searchParams.get('session') || '';
         const input = (req.headers['content-type'] || '').startsWith('application/octet-stream')
           ? { audio: await readRaw(req, 3_000_000) } : await readBody(req);
+        if (url.searchParams.get('wake') === '1') input.wake = true;      // คลิปแรกหลังคำปลุก → ยืนยันด้วย Scribe ก่อนตอบ
         res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-cache' });
         const emit = (o) => { if (!res.writableEnded) res.write(JSON.stringify(o) + '\n'); };
         const cut = new AbortController();                                   // แอปตัดสาย (ผู้ใช้พูดแทรก) → หยุดรอบนี้ ไม่ทำเสียงที่เหลือ

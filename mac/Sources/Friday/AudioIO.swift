@@ -46,6 +46,8 @@ final class AudioIO {
     private var vpUnsupported = false                 // ลอง voice processing แล้วไม่ได้ → ไม่ลองซ้ำจนกว่าจะเปิดแอปใหม่
     private var vpio: VPIOUnit?                       // ตัวตัดเสียงสะท้อนแบบ AudioUnit ตรง (ใช้เมื่อแบบ AVAudioEngine เปิดไม่ได้)
     private var vpioUnsupported = false
+    /// ใช้ตัวตัดเสียงสะท้อนแบบ AudioUnit ตรงไหม (config.vpio) — user ปิด 9 ต.ค.: ทำหูคำปลุกได้ยินเสียงในห้องมากขึ้น ตื่นเองบ่อย
+    var useVPIO = false
     private var benchedInputs: [String: Date] = [:]   // ไมค์ที่เงียบสนิท (ไมค์ MacBook ตอนปิดฝา) → พักไว้ชั่วคราว
     private var zeroSince: Date?
     private var building = false
@@ -91,7 +93,7 @@ final class AudioIO {
 
         // ตัวตัดเสียงสะท้อนแบบ AudioUnit ตรง: เปิดได้แม้ไมค์/ลำโพงคนละตัว (ไมค์หูฟัง + ลำโพงจอ) → พูดแทรกได้ ไม่ได้ยินเสียงตัวเอง
         // AirPlay/HomePod ไม่ใช้ (เสียงหน่วง ~2 วิ เกินที่ตัวตัดเสียงสะท้อนรับได้)
-        if !vpioUnsupported, !outs[0].airplay {
+        if useVPIO, !vpioUnsupported, !outs[0].airplay {
             do { try buildVPIO(out: outs[0], inp: ins[0]); return }
             catch { vpioUnsupported = true; Log.write("audio: VoiceProcessingIO ใช้ไม่ได้ (\((error as NSError).code)) → แยกไมค์/ลำโพง") }
         }

@@ -117,6 +117,7 @@ final class FridayController: ObservableObject {
             } }
             audio.outputPriority = config!.outputPriority ?? []
             audio.inputPriority = config!.inputPriority ?? []
+            audio.useVPIO = config!.vpio == true
             audio.onDevicesChanged = { [weak self] in Task { @MainActor in
                 guard let self else { return }
                 self.inputName = self.audio.inputName; self.outputName = self.audio.outputName; self.onPhaseChanged?(self.phase)

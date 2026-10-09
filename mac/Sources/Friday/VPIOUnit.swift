@@ -37,6 +37,10 @@ final class VPIOUnit {
         try chk(AudioUnitSetProperty(au, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Input, 1, &one, 4))
         try chk(AudioUnitSetProperty(au, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 1, &i, 4))
         try chk(AudioUnitSetProperty(au, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &o, 4))
+        // ปิด AGC: ขยายเสียงไกลๆ ในห้อง (ทีวี/คนคุย) จนหูคำปลุกได้ยินเหมือน "ฟรายเดย์" แล้วตื่นเอง (9 ต.ค. 5 ครั้ง/ชม.)
+        // ตัดเสียงสะท้อนยังได้ -22 dB เท่าเดิม (วัดตอน AGC ปิด)
+        var agc: UInt32 = 0
+        _ = AudioUnitSetProperty(au, kAUVoiceIOProperty_VoiceProcessingEnableAGC, kAudioUnitScope_Global, 0, &agc, 4)
         // เสียงแอปอื่น (เพลง/วิดีโอ) ไม่ต้องหรี่ลงตอน Friday ฟัง
         var duck = AUVoiceIOOtherAudioDuckingConfiguration(mEnableAdvancedDucking: true, mDuckingLevel: .min)
         _ = AudioUnitSetProperty(au, kAUVoiceIOProperty_OtherAudioDuckingConfiguration, kAudioUnitScope_Global, 0, &duck,

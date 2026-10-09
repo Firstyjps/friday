@@ -33,6 +33,7 @@ enum ServerAPI {
         var maxSessionSec: Double? = nil
         var actionTools: [String]? = nil     // เครื่องมือที่ลงมือทำ → ต้องตามหลังเสียงผู้ใช้
         var engine: String? = nil            // live | cascade (CascadeSession)
+        var vpio: Bool? = nil                // ตัดเสียงสะท้อนด้วย VoiceProcessingIO (ปิดเป็นค่าเริ่ม)
         var bargeIn: Bool? = nil             // พูดแทรกด้วย EchoGate — ปิดไว้ตามที่ user เลือก (Friday พูด = ปิดไมค์) 9 ต.ค.
     }
 

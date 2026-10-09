@@ -180,7 +180,10 @@
     }
   ],
   "airplayEchoTailSec": 2.5,
-  "outputPriority": ["Main Bedroom", "HomePod", "AirPlay", 
+  "outputPriority": [
+    "Main Bedroom",
+    "HomePod",
+    "AirPlay",
     "PG32UCDM",
     "Jabra",
     "PowerConf",
@@ -189,7 +192,8 @@
     "External Headphones",
     "MacBook Air Speakers"
   ],
-  "inputPriority": ["External Microphone", 
+  "inputPriority": [
+    "External Microphone",
     "Jabra",
     "PowerConf",
     "Luna",
@@ -209,9 +213,9 @@
   "_voiceNote": "เปลี่ยนเสียง: แก้ voiceName (หญิง: Kore, Aoede, Leda, Zephyr · ชาย: Puck, Charon, Fenrir, Orus) + แก้ประโยคเพศใน system ให้ตรง แล้วเรียก Friday ใหม่ (ไม่ต้อง build)",
   "pricing": {
     "inText": 0.75,
-    "inAudio": 3.0,
+    "inAudio": 3,
     "outText": 4.5,
-    "outAudio": 12.0,
+    "outAudio": 12,
     "_unit": "USD ต่อ 1M tokens (Gemini 3.1 Flash Live, ai.google.dev/gemini-api/docs/pricing 12 ก.ย. 2026)"
   },
   "serverTools": [
@@ -283,5 +287,15 @@
     "voice": "Kanya"
   },
   "_homepodNote": "HomePod mini \"Main Bedroom\" — พูดออกผ่าน AirPlay (pyatv atvremote, ~/Library/Python/3.13/bin) · /api/ask = Shortcut \"เลขาส่วนตัว\" บน iPhone/HomePod ใช้ textModel",
-  "textModel": "gemini-3.1-flash-lite"
+  "textModel": "gemini-3.1-flash-lite",
+  "toolsOff": [],
+  "shortcutsAll": [
+    "เปิดไฟ",
+    "ปิดไฟ",
+    "ปิดไฟห้องน้ำ",
+    "เปิดทีวี",
+    "ปิดทีวี",
+    "เปิดแอร์",
+    "ปิดแอร์"
+  ]
 }

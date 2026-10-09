@@ -2,7 +2,7 @@
 // + /api/mac: รับงานจาก tool run_on_mac → รัน Claude Code บน Mac → คืนผล (+ Telegram สำรอง)
 import http from 'node:http';
 import { spawn } from 'node:child_process';
-import { readFile, appendFile, writeFile, mkdir, readdir } from 'node:fs/promises';
+import { readFile, appendFile, writeFile, mkdir, readdir, rename } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { extname, join } from 'node:path';
@@ -12,6 +12,7 @@ import { decide as policyDecide, secretCheck, ruleKey, RuleStore } from './lib/p
 import { speak as homepodSpeak, askText } from './lib/homepod.mjs';
 import { synth, ttsEnabled } from './lib/tts.mjs';
 import { Cascade } from './lib/cascade.mjs';
+import { JobLog, parseChat, chatLines, originFor, usageReport, vaultProjects, logTail, memoryNotes, forgetNote, applySettings, effectiveConfig } from './lib/dashboard.mjs';
 
 const PORT = Number(process.env.PORT || 4850);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -29,6 +30,7 @@ const ALLOWED_ORIGINS = new Set([`http://localhost:${PORT}`, `http://127.0.0.1:$
 const log = (line) => mkdir(join(HOME, 'logs'), { recursive: true }).then(() => appendFile(LOG, `${new Date().toISOString()} | ${line}\n`)).catch(() => {});
 
 // ---------- Gemini token ----------
+let tokenMs = null;                    // เวลาออก token ล่าสุด (หน้า System)
 async function createToken() {
   if (!KEY) throw new Error('GEMINI_API_KEY ไม่ได้ตั้งใน ~/Desktop/FRIDAY/.env');
   const now = Date.now();
@@ -43,6 +45,7 @@ async function createToken() {
   });
   const body = await res.json();
   if (!res.ok) throw new Error(`auth_tokens ${res.status}: ${JSON.stringify(body).slice(0, 300)}`);
+  tokenMs = Date.now() - now;
   return body.name;
 }
 // เตรียม token สำรองไว้ล่วงหน้า 1 ใบ → ตอนปลุกไม่ต้องรอ Google (ประหยัด ~0.3–0.6 วิ) · token ใช้ได้ครั้งเดียว จึง mint ใบใหม่ทันทีที่ถูกหยิบ
@@ -141,6 +144,7 @@ function agentFor(convo, c) {
     onPermission: async (tool, input, signal) => {
       const job = c.currentJob;
       if (!job) return false;
+      if (tool !== 'Read' && tool !== 'Glob' && tool !== 'Grep') job.cmd = tool === 'Bash' ? input.command : describeTool(tool, input);   // โชว์ในหน้า Tasks
       const cfg = JSON.parse(await readText(join(PUBLIC, 'config.json')) || '{}');
       const secret = secretCheck(tool, input, cfg.protectedPaths);
       if (job.confirmed && !secret) return true;               // ยืนยันงานนี้ไปแล้ว → ทำต่อได้ ยกเว้นแตะไฟล์ลับ (ถามทุกครั้ง)
@@ -175,7 +179,7 @@ function createJob(convo, task, { forceConfirm = false } = {}) {
   const dup = [...jobs.values()].find((j) => j.convo === convo && j.task === task && Date.now() - j.startedAt < 30000 && j.status !== 'cancelled');
   if (dup) { log(`JOB ${dup.id} dedupe (สั่งซ้ำ) | ${task}`); return dup; }
   const id = randomUUID().slice(0, 8);
-  const job = { id, convo, task, status: 'new', result: null, reason: null, confirmed: false, startedAt: Date.now() };
+  const job = { id, convo, task, via: 'Claude', tool: 'run_on_mac', status: 'new', result: null, reason: null, confirmed: false, startedAt: Date.now() };
   jobs.set(id, job);
   if (forceConfirm) hold(job, 'ไม่ได้ยินผู้ใช้สั่งงานนี้ด้วยเสียง ต้องให้ผู้ใช้ยืนยันก่อน', 'no user speech');
   else if (RISKY.test(task)) hold(job, 'คำสั่งเข้าข่ายงานเสี่ยง', 'risky');
@@ -240,6 +244,7 @@ async function settle(job) {
 // ---------- คำปลุก (โหมดห้อง) ----------
 // หน้าเว็บส่งเสียงช่วงที่มีคนพูด (PCM16 16kHz mono) มา → whisper-server ในเครื่องถอดความ → เช็คคำว่า Friday
 const WHISPER = process.env.WHISPER_URL || 'http://127.0.0.1:4851/inference';
+let whisperMs = null;                  // เวลาเช็คคำปลุกเฉลี่ย (หน้า System)
 // regex คำปลุกอยู่ใน lib/rules.mjs (WAKE)
 
 function pcmToWav(pcm) {
@@ -256,8 +261,10 @@ async function detectWake(pcm) {
   form.append('file', new Blob([pcmToWav(pcm)], { type: 'audio/wav' }), 'clip.wav');
   form.append('response_format', 'json');
   form.append('prompt', 'Friday ฟรายเดย์');   // คำใบ้ → ถอดคำปลุกถูกขึ้นตอนมีเสียงรบกวน (ทดสอบ 8 ต.ค.: ไม่ทำให้ปลุกมั่วกับเงียบ/ดนตรี/เสียงพูดอื่น)
+  const t0 = Date.now();
   const r = await fetch(WHISPER, { method: 'POST', body: form, signal: AbortSignal.timeout(8000) });
   const text = ((await r.json()).text || '').trim();
+  whisperMs = whisperMs == null ? Date.now() - t0 : Math.round(whisperMs * 0.8 + (Date.now() - t0) * 0.2);
   const m = text.replace(/\[[^\]]*\]|\([^)]*\)/g, ' ').trim().match(WAKE);   // ตัด [เสียงดนตรี] ที่ whisper ใส่หน้าคำปลุกตอนมีเพลง
   return { text, wake: !!m, phrase: m ? m[0].trim() : '' };
 }
@@ -367,6 +374,7 @@ function startEar() {
   }, 5000);
 
   earControl = {
+    status: () => (ff ? 'listening' : earOff ? 'off' : 'standby'),
     stop() { earOff = true; ff?.kill(); log('ear: ปิด (ผู้ใช้ปิดแอป Friday)'); },
     start() { if (!earOff) return; earOff = false; log('ear: เปิดกลับ'); if (!ff) spawnFf(); },
   };
@@ -513,6 +521,28 @@ const serverTools = {
 const loadCfg = async () => JSON.parse(await readText(join(PUBLIC, 'config.json')) || '{}');
 const announce = async (text) => { const cfg = await loadCfg(); return homepodSpeak(text, cfg.homepod, log, cfg); };
 serverTools.announce_homepod = async ({ text }) => announce(text);
+
+// ---------- บันทึกงาน (หน้า Tasks ของ Friday.app) ----------
+const jobLog = new JobLog(join(DATA, 'jobs.jsonl'));
+setInterval(() => jobLog.sweep(jobs), 1000);
+// เครื่องมือเร็วฝั่ง server ก็นับเป็นงาน: via Fast lane / Vault / Shortcut · ที่เหลือ (remember, get_usage, …) เก็บไว้นับสถิติแต่ไม่โชว์
+const TOOL_VIA = { open_app: 'Fast lane', open_url: 'Fast lane', system_info: 'Fast lane', vault_lookup: 'Vault', run_shortcut: 'Shortcut' };
+const toolTitle = (n, a) => ({ open_app: `เปิด ${a.name}`, open_url: `เปิดเว็บ ${String(a.url || '').replace(/^https?:\/\//, '').slice(0, 60)}`, system_info: 'เช็คสถานะเครื่อง',
+  vault_lookup: `ดูโปรเจกต์ ${a.query}`, run_shortcut: String(a.name || ''), remember: `จำ: ${String(a.note || '').slice(0, 80)}`, get_usage: 'ดูค่าใช้จ่าย', announce_homepod: 'พูดออก HomePod' }[n] ?? n);
+const toolCmd = (n, a) => ({ open_app: `open -a "${a.name}"`, open_url: `open ${a.url}`, system_info: 'system_info (df, pmset, uptime)', vault_lookup: `vault_lookup "${a.query}"`, run_shortcut: `shortcuts run "${a.name}"`, remember: `remember "${String(a.note || '').slice(0, 120)}"` }[n] ?? `${n} ${JSON.stringify(a).slice(0, 120)}`);
+async function callServerTool(name, args = {}) {
+  const off = (await loadCfg()).toolsOff ?? [];
+  if (off.includes(name)) return { ok: false, result: `ผู้ใช้ปิดเครื่องมือ ${name} ไว้ในหน้าต่าง Friday` };
+  const t0 = Date.now();
+  let r;
+  try { r = await serverTools[name](args); } catch (e) { r = { ok: false, result: e.message }; }
+  const secs = ((Date.now() - t0) / 1000).toFixed(1);
+  const text = name === 'system_info' && r?.ok ? `${r.datetime} · แบต ${r.battery}` : name === 'vault_lookup' ? (r?.found ? `เจอ ${r.file}` : r?.result) : name === 'get_usage' ? `เดือนนี้ ฿${r?.thb}` : r?.result;
+  const id = randomUUID().slice(0, 8);
+  jobs.set(id, { id, convo: 'tool', tool: name, via: TOOL_VIA[name] ?? 'Friday', hidden: !TOOL_VIA[name], task: toolTitle(name, args), cmd: toolCmd(name, args),
+                 status: r?.ok === false ? 'error' : 'done', result: `${String(text ?? '').slice(0, 400)}${text ? ' · ' : ''}${secs} s`, startedAt: t0, endedAt: Date.now() });
+  return r;
+}
 let homepodPending = null;    // job ที่ HomePod ถามยืนยันค้างไว้ → "เลขาส่วนตัว ยืนยัน" ครั้งถัดไปจะยืนยันงานนี้
 const chatLog = (who, text) => appendFile(CHAT, `${new Date().toISOString().slice(0, 19)}Z | ${who} ${String(text).replace(/\n/g, ' ')}\n`).catch(() => {});
 
@@ -541,7 +571,7 @@ async function homepodAsk(text) {
       if (job.status === 'running') job.reportedRunning = true;
       return { ...view(job), result: job.result && frameResult('ผลจาก Mac', job.result) };
     }
-    if (Object.hasOwn(serverTools, name) && (cfg.serverTools ?? []).includes(name)) return serverTools[name](args);
+    if (Object.hasOwn(serverTools, name) && (cfg.serverTools ?? []).includes(name)) return callServerTool(name, args);
     return { ok: false, result: `เครื่องมือ ${name} ใช้ผ่าน HomePod ไม่ได้` };
   };
   let answer;
@@ -570,6 +600,89 @@ const cascade = new Cascade({ key: KEY, log, wav16k: pcmToWav, scribe, record: r
 // ทำเสียงประโยคแทรก (กำลังเช็คให้ค่ะ/สักครู่นะคะ/ได้เลยค่ะ) เก็บไว้ตั้งแต่เปิด server → ใช้ครั้งแรกก็ออกทันที
 loadCfg().then((cfg) => { if (cfg.engine === 'cascade' && cfg.cascade?.filler !== false) cascade.warm(cfg); });
 const turnTails = new Map();          // session → promise (ทีละรอบ)
+
+// ---------- หน้าต่างหลัก Friday.app (/api/app/*) ----------
+const CFG_FILE = join(PUBLIC, 'config.json');
+async function saveCfg(cfg) {                  // เขียนแบบ atomic — server/แอปอ่าน config.json ทุกครั้ง
+  const tmp = CFG_FILE + '.tmp';
+  await writeFile(tmp, JSON.stringify(cfg, null, 2) + '\n');
+  await rename(tmp, CFG_FILE);
+}
+async function appApi(req, res, url) {
+  const p = url.pathname.slice('/api/app/'.length);
+  if (req.method === 'GET' && p === 'tasks') {
+    const all = await jobLog.all(jobs), chat = chatLines(await readText(CHAT));
+    const list = all.filter((j) => !j.hidden).slice(0, 200).map((j) => ({ ...j, origin: originFor(j, chat) }));
+    return json(res, 200, { tasks: list });
+  }
+  if (req.method === 'GET' && p === 'history') {
+    const all = await jobLog.all(jobs);
+    const sessions = parseChat(await readText(CHAT)).filter((s) => Date.now() - s.start < 60 * 86400e3).reverse().slice(0, 300)
+      .map((s) => ({ ...s, tasks: all.filter((j) => !j.hidden && j.startedAt >= s.start - 60e3 && j.startedAt <= s.end + 30e3).length }));
+    return json(res, 200, { sessions });
+  }
+  if (req.method === 'GET' && p === 'usage') {
+    return json(res, 200, usageReport(await readText(USAGE), await loadCfg(), await jobLog.all(jobs)));
+  }
+  if (req.method === 'GET' && p === 'memory') return json(res, 200, { notes: await memoryNotes(MEMORY), max: 60 });
+  if (req.method === 'POST' && p === 'memory/add') {
+    const { note } = await readBody(req);
+    if (!note || typeof note !== 'string') return json(res, 400, { error: 'note required' });
+    return json(res, 200, await serverTools.remember({ note }));
+  }
+  if (req.method === 'POST' && p === 'memory/forget') {
+    const { line } = await readBody(req);
+    const ok = typeof line === 'string' && await forgetNote(MEMORY, line);
+    if (ok) log(`MEMORY - ${line.slice(0, 120)} (ลืมจากหน้าต่าง Friday)`);
+    return json(res, ok ? 200 : 404, { ok });
+  }
+  if (req.method === 'GET' && p === 'vault') {
+    const cfg = await loadCfg();
+    const exclude = cfg.vaultExclude || VAULT_EXCLUDE_DEFAULT;
+    return json(res, 200, { projects: await vaultProjects(VAULT, exclude), exclude });
+  }
+  if (req.method === 'GET' && p === 'settings') {
+    const cfg = await loadCfg();
+    const week = (await jobLog.all(jobs)).filter((j) => Date.now() - j.startedAt < 7 * 86400e3);
+    const uses = {}; for (const j of week) uses[j.tool] = (uses[j.tool] ?? 0) + 1;
+    return json(res, 200, {
+      trust: cfg.trust ?? 'relaxed', engine: cfg.engine ?? 'live', idleMs: cfg.idleMs ?? 20000, maxSessionSec: cfg.maxSessionSec ?? 720,
+      voice: cfg.engine === 'cascade' ? (cfg.cascade?.voice ?? 'Despina') : (cfg.speechConfig?.voiceConfig?.prebuiltVoiceConfig?.voiceName ?? 'Despina'),
+      toolsOff: cfg.toolsOff ?? [], uses, homepod: cfg.homepod?.voice ?? null,
+      shortcuts: (cfg.shortcutsAll ?? cfg.shortcutsAllowed ?? []).map((n) => ({ name: n, on: (cfg.shortcutsAllowed ?? []).includes(n) })),
+    });
+  }
+  if (req.method === 'POST' && p === 'settings') {
+    const cfg = await loadCfg();
+    if (!applySettings(cfg, await readBody(req))) return json(res, 400, { error: 'bad setting' });
+    await saveCfg(cfg);
+    log('config: แก้จากหน้าต่าง Friday');
+    return json(res, 200, { ok: true });
+  }
+  if (req.method === 'GET' && p === 'system') {
+    const cfg = await loadCfg();
+    const t0 = Date.now();
+    const whisperUp = await fetch(WHISPER.replace(/\/inference$/, '/'), { signal: AbortSignal.timeout(1500) }).then(() => true).catch(() => false);
+    const agents = [...convos.values()].filter((c) => c.agent && !c.agent.closed).length;
+    const running = [...jobs.values()].filter((j) => j.status === 'running').length;
+    const waiting = [...jobs.values()].filter((j) => j.status === 'needs_confirmation').length;
+    return json(res, 200, {
+      server: { uptimeSec: Math.round(process.uptime()), port: PORT },
+      whisper: { up: whisperUp, pingMs: Date.now() - t0, checkMs: whisperMs },
+      agent: { sessions: agents, running, waiting },
+      gemini: { keySet: !!KEY, model: cfg.engine === 'cascade' ? (cfg.cascade?.model ?? cfg.textModel) : cfg.model, engine: cfg.engine ?? 'live', tokenMs },
+      ear: { enabled: EAR, state: earControl?.status() ?? 'off', appListening: roomAlive() },
+      log: logTail(await readText(LOG)),
+    });
+  }
+  if (req.method === 'POST' && p === 'restart') {
+    log('server: รีสตาร์ทจากหน้าต่าง Friday');
+    json(res, 200, { ok: true });
+    setTimeout(() => process.exit(0), 300);      // LaunchAgent com.kron.friday (KeepAlive) เปิดใหม่ให้เอง
+    return;
+  }
+  return json(res, 404, { error: 'not found' });
+}
 
 // ---------- HTTP ----------
 const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
@@ -611,7 +724,7 @@ http.createServer(async (req, res) => {
         return json(res, 200, { ok: true });
       }
       const t = url.pathname.match(/^\/api\/tool\/(\w+)$/);
-      if (req.method === 'POST' && t && Object.hasOwn(serverTools, t[1])) return json(res, 200, await serverTools[t[1]](await readBody(req)));
+      if (req.method === 'POST' && t && Object.hasOwn(serverTools, t[1])) return json(res, 200, await callServerTool(t[1], await readBody(req)));
       if (req.method === 'POST' && url.pathname === '/api/ping') {   // heartbeat จากหน้าโหมดห้อง (debug)
         const b = await readBody(req); roomSeenAt = Date.now(); if (b.track !== "live" || b.ctx !== "running" || DEBUG_PING) log(`ping | ${JSON.stringify(b)}`); return json(res, 200, { ok: true });
       }
@@ -640,7 +753,7 @@ http.createServer(async (req, res) => {
       if (req.method === 'POST' && url.pathname === '/api/cascade/open') {
         const { session, extra } = await readBody(req);
         if (!session) return json(res, 400, { error: 'session required' });
-        const cfg = await loadCfg();
+        const cfg = effectiveConfig(await loadCfg());
         cascade.open(String(session), { system: cfg.system + String(extra || ''), cfg });
         return json(res, 200, { ok: true });
       }
@@ -694,8 +807,10 @@ http.createServer(async (req, res) => {
         const job = jobs.get(m[1]);
         return job ? json(res, 200, view(job)) : json(res, 404, { error: 'no such job' });
       }
+      if (url.pathname.startsWith('/api/app/')) return appApi(req, res, url);
       return json(res, 404, { error: 'not found' });
     }
+    if (url.pathname === '/config.json') return json(res, 200, effectiveConfig(await loadCfg()));   // ตัดเครื่องมือที่ผู้ใช้ปิดไว้
     const path = url.pathname === '/' ? '/index.html' : url.pathname;
     if (path.includes('..')) return json(res, 400, { error: 'bad path' });
     const data = await readFile(join(PUBLIC, path));

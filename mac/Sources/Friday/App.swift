@@ -8,31 +8,23 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let controller = FridayController()
     private var statusItem: NSStatusItem!
-    private var panel: NSPanel!          // หน้าต่าง history (เปิดจากเมนู)
+    private var mainWindow: MainWindowController?   // หน้าต่างหลัก (ดูข้อมูล/ตั้งค่า) — สร้างตอนเปิดครั้งแรก
     private var overlay: OverlayPanel!   // Edge Wave overlay ขอบขวาของจอ (โผล่เฉพาะตอนคุย)
     private let overlayUI = OverlayUI()
     private var mouseTimer: Timer?
     private var keyMonitor: Any?
     private var confirmSub: AnyCancellable?
     private var hotKey: HotKey?
+    private var jobSub: AnyCancellable?
 
     func applicationDidFinishLaunching(_ n: Notification) {
+        T.registerFonts()
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         buildMenu()
         updateIcon(.starting)
-
-        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 360, height: 440),
-                        styleMask: [.titled, .closable, .nonactivatingPanel, .fullSizeContentView, .utilityWindow],
-                        backing: .buffered, defer: false)
-        panel.titleVisibility = .hidden
-        panel.titlebarAppearsTransparent = true
-        panel.isFloatingPanel = true
-        panel.level = .floating
-        panel.hidesOnDeactivate = false
-        panel.isMovableByWindowBackground = true
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel.contentView = NSHostingView(rootView: PanelView(c: controller))
-        placePanel()
+        jobSub = controller.$activeJobs.map { $0 > 0 }.removeDuplicates().sink { [weak self] _ in
+            DispatchQueue.main.async { guard let self else { return }; self.updateIcon(self.controller.phase) }
+        }
 
         overlay = OverlayPanel(contentRect: NSRect(x: 0, y: 0, width: OverlayView.width, height: 600),
                                styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -87,13 +79,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if controller.phase == .sleeping { controller.wake(prebuffer: [], greet: true) }
     }
 
-    private func placePanel() {
-        guard let screen = NSScreen.main?.visibleFrame else { return }
-        panel.setFrameOrigin(NSPoint(x: screen.maxX - 380, y: screen.maxY - 460))
-    }
-
-    private func showPanel(_ show: Bool) {
-        if show { panel.orderFrontRegardless() } else { panel.orderOut(nil) }
+    func openMain(_ page: MainUI.Page? = nil) {
+        if mainWindow == nil { mainWindow = MainWindowController(controller: controller) }
+        mainWindow?.show(page)
     }
 
     /// overlay: ชิดขอบขวาของจอหลัก กว้าง 560 สูงเต็ม visibleFrame (ใต้ menu bar) — เนื้อหาอยู่กลางแนวตั้ง
@@ -126,15 +114,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !onPanel, overlayUI.hover != nil { overlayUI.hover = nil }
     }
 
+    /// ไอคอนเมนูบาร์ = Fri the Fox (template): ตาเปิด = คุยอยู่ · เหลือบข้าง = กำลังคิด/ทำงาน · หลับ = รอคำปลุก · จาง = ปิดหู
     private func updateIcon(_ p: FridayController.Phase) {
-        let name: String
+        let img: NSImage?
         switch p {
-        case .live: name = "waveform.circle.fill"
-        case .connecting: name = "ellipsis.circle.fill"
-        case .error: name = "exclamationmark.circle"
-        default: name = controller.earMuted ? "mic.slash.circle" : "circle.circle"
+        case .error: img = NSImage(systemSymbolName: "exclamationmark.circle", accessibilityDescription: "Friday")
+        case .live: img = Fox.menuBarImage(mood: controller.activeJobs > 0 ? .thinking : .listening)
+        case .connecting: img = Fox.menuBarImage(mood: .thinking)
+        default: img = Fox.menuBarImage(mood: controller.activeJobs > 0 ? .thinking : .sleeping, dim: controller.earMuted || p == .starting)
         }
-        statusItem.button?.image = NSImage(systemSymbolName: name, accessibilityDescription: "Friday")
+        statusItem.button?.image = img
     }
 
     private func buildMenu() {
@@ -142,7 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let talking = controller.phase == .live || controller.phase == .connecting
         m.addItem(withTitle: talking ? "หยุดคุย" : "คุยกับ Friday  (⌥⌘F)", action: #selector(toggleTalk), keyEquivalent: "").target = self
         if talking { m.addItem(withTitle: controller.micMuted ? "เปิดไมค์" : "ปิดไมค์ชั่วคราว", action: #selector(toggleMic), keyEquivalent: "").target = self }
-        m.addItem(withTitle: "ประวัติการคุย", action: #selector(showWindow), keyEquivalent: "").target = self
+        m.addItem(withTitle: "Open Friday…", action: #selector(showWindow), keyEquivalent: "o").target = self
         m.addItem(.separator())
         for line in ["🔊 \(controller.outputName.isEmpty ? "-" : controller.outputName)", "🎤 \(controller.inputName.isEmpty ? "-" : controller.inputName)", "💰 \(controller.usageLine.isEmpty ? "-" : controller.usageLine)"] {
             let it = NSMenuItem(title: line, action: nil, keyEquivalent: ""); it.isEnabled = false; m.addItem(it)
@@ -156,7 +145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func toggleTalk() { showOverlay(true); controller.toggle() }
-    @objc private func showWindow() { showPanel(true) }
+    @objc private func showWindow() { openMain() }
     @objc private func toggleMic() { controller.toggleMic() }
     @objc private func toggleEar() { controller.toggleEar() }
     @objc private func openLog() { NSWorkspace.shared.open(URL(fileURLWithPath: NSHomeDirectory() + "/logs/friday.log")) }
@@ -169,6 +158,12 @@ public func fridayMain() {
     MainActor.assumeIsolated {
         if CommandLine.arguments.contains("--selftest") { SelfTest.run(); RunLoop.main.run() }
         if CommandLine.arguments.contains("--overlay-demo") { OverlayDemo.run(); NSApplication.shared.run() }
+        if let i = CommandLine.arguments.firstIndex(of: "--make-iconset"), i + 1 < CommandLine.arguments.count {   // build.sh: ไอคอนแอปจิ้งจอก
+            exit(Fox.writeIconset(to: CommandLine.arguments[i + 1]) ? 0 : 1)
+        }
+        if let i = CommandLine.arguments.firstIndex(of: "--main-demo") {   // เปิดหน้าต่างหลักอย่างเดียว (ไม่เปิดไมค์) · ใส่โฟลเดอร์ = ถ่ายภาพทุกหน้าแล้วปิด
+            MainDemo.run(out: i + 1 < CommandLine.arguments.count ? CommandLine.arguments[i + 1] : nil); NSApplication.shared.run()
+        }
         if CommandLine.arguments.contains("--vp-test") { NSApplication.shared.setActivationPolicy(.accessory); VPTest.run(); NSApplication.shared.run() }
         let app = NSApplication.shared
         let delegate = AppDelegate()

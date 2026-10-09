@@ -29,6 +29,7 @@ final class CascadeSession: LiveSession {
     private var noiseFloor: Double
     private var seg: [Data] = [], preroll: [Data] = []
     private var voiced = 0, silent = 0, speechRun = 0
+    private var levels: [Double] = []              // ระดับเสียง 4 วิล่าสุด → พื้นเสียงจริงตอนมีเพลง/เสียงห้องคลอ
     private var firstSegment = true
     // ---- ข้อความสดระหว่างพูด: ส่งช่วงที่พูดไปแล้วให้ whisper ในเครื่องถอดทุก ~0.5 วิ ----
     private var segId = 0                          // ช่วงพูดปัจจุบัน (ทิ้งผลที่มาช้าของช่วงเก่า)
@@ -67,7 +68,13 @@ final class CascadeSession: LiveSession {
         guard !closed else { return }
         if busy { resetVAD(); return }                 // half-duplex: ระหว่าง Friday คิด/พูด ไม่รับเสียง
         let level = WakeDetector.rms(pcm16k)
-        let isSpeech = level > max(min(noiseFloor * 3, noiseFloor + 1500), Self.minSpeech)
+        // พื้นเสียง = ค่าต่ำสุดช่วงล่าง (เปอร์เซ็นไทล์ 20) ของ 4 วิล่าสุด: มีเพลงเปิดคลอ → เกณฑ์ขยับขึ้นเหนือเพลง
+        // (9 ต.ค. เพลงดังเกินเกณฑ์ตลอด → ไม่เคยเจอความเงียบ ทุกประโยครอจนชนเพดาน 8 วิ)
+        levels.append(level); if levels.count > 40 { levels.removeFirst() }
+        let ambient = levels.count >= 10 ? levels.sorted()[levels.count / 5] : 0
+        let base = max(noiseFloor, ambient)
+        let isSpeech = level > max(min(base * 3, base + 1500), Self.minSpeech)
+        lastBase = base
         if !isSpeech && seg.isEmpty {
             noiseFloor = noiseFloor * 0.95 + level * 0.05
             preroll.append(pcm16k); if preroll.count > Self.prerollChunks { preroll.removeFirst() }
@@ -85,7 +92,7 @@ final class CascadeSession: LiveSession {
         firstSegment = false
         let clip = seg.reduce(Data(), +), enough = voiced >= Self.minVoiced
         // เก็บเหตุผลที่ตัดไว้จูน endSilence/minVoiced จาก log จริง (รีวิว 9 ต.ค.: ยังไม่มีข้อมูลพอ)
-        Log.write("vad: ตัด\(silent >= endSilence ? "เพราะเงียบ \(endSilence)" : "เพราะยาวเกิน") voiced=\(voiced) chunks=\(seg.count)\(enough ? "" : " → สั้นไป ทิ้ง")")
+        Log.write("vad: ตัด\(silent >= endSilence ? "เพราะเงียบ \(endSilence)" : "เพราะยาวเกิน") voiced=\(voiced) chunks=\(seg.count) พื้น=\(Int(lastBase))\(enough ? "" : " → สั้นไป ทิ้ง")")
         resetVAD()
         if enough { partial(clip); run(audio: clip) }      // ถอดทั้งช่วงอีกรอบ (เร็วกว่า Scribe) ให้ข้อความสดครบก่อนข้อความจริงมา
     }
@@ -117,6 +124,7 @@ final class CascadeSession: LiveSession {
         run(json: ["toolResponses": rs])
     }
 
+    private var lastBase = 0.0
     private func resetVAD() { seg = []; voiced = 0; silent = 0; speechRun = 0 }
 
     // ---------- หนึ่งรอบ ----------

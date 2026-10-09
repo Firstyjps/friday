@@ -130,3 +130,13 @@ test('PROMISED: จับคำสัญญาว่าจะไปทำ ไม
   for (const t of ['เดี๋ยวดูให้นะคะ', 'ขอเช็คให้ก่อนนะคะ', 'รอสักครู่นะคะ', 'เดี๋ยวจัดการให้ค่ะ', 'เดี๋ยวลองดูนะคะ', 'กำลังค้นหาให้ค่ะ', 'ได้ค่ะ เดี๋ยวทำให้นะคะ']) assert.ok(PROMISED.test(t), t);
   for (const t of ['ขอโทษที่ทำให้รอนะคะ', 'แบบนี้จะทำให้ดีขึ้นค่ะ', 'ฝนจะทำให้อากาศเย็นลง', 'วันนี้อากาศดีค่ะ']) assert.ok(!PROMISED.test(t), t);
 });
+
+test('louder: เสียงเบาดังขึ้น ~6 dB · เสียงดังไม่เกินเพดาน (ไม่แตก)', async () => {
+  const { louder } = await import('../lib/cascade.mjs');
+  const pcm = (amp) => { const b = Buffer.alloc(4800); for (let i = 0; i < 2400; i++) b.writeInt16LE(Math.round(amp * Math.sin(i / 5)), i * 2); return b; };
+  const peak = (b) => { let m = 0; for (let i = 0; i < b.length; i += 2) m = Math.max(m, Math.abs(b.readInt16LE(i))); return m; };
+  const st = () => ({ gain: 10 ** (6 / 20), env: 0 });
+  assert.ok(Math.abs(peak(louder(pcm(5000), st())) / 5000 - 2) < 0.05);          // +6 dB ≈ ×2
+  assert.ok(peak(louder(pcm(30000), st())) <= Math.ceil(0.89 * 32767));          // ยอดสูงถูกจำกัด ไม่ clip
+  assert.equal(louder(pcm(5000), { gain: 1, env: 0 }).equals(pcm(5000)), true);  // gainDb 0 = ไม่แตะ
+});

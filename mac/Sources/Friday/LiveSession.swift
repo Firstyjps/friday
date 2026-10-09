@@ -15,6 +15,7 @@ class LiveSession: NSObject, URLSessionWebSocketDelegate {
         case goAway(String)               // Gemini เตือนว่าจะปิดการเชื่อมต่อ (timeLeft)
         case closed(String)
         case falseWake                    // cascade: Scribe ไม่ได้ยินคำปลุกในคลิปแรก → กลับไปหลับเงียบๆ
+        case notice(String)               // cascade: รอบนี้ล้ม (server/เน็ต) → บอกผู้ใช้ ไม่ใช่เงียบหายไป
     }
 
     var onEvent: ((Event) -> Void)?

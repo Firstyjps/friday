@@ -109,15 +109,14 @@ final class FridayController: ObservableObject {
                 do { config = try await ServerAPI.config() }
                 catch { Log.write("start: config error \(error)"); try? await Task.sleep(for: .seconds(2)) }
             }
-            affirm = try? NSRegularExpression(pattern: config!.affirm, options: .caseInsensitive)
-            negate = try? NSRegularExpression(pattern: config!.negate, options: .caseInsensitive)
-            farewell = config!.farewell.flatMap { try? NSRegularExpression(pattern: $0, options: .caseInsensitive) }
-            stopWords = config!.stopWords.flatMap { try? NSRegularExpression(pattern: $0, options: .caseInsensitive) }
+            applyConfig(config!)
             audio.onMic = { [weak self] chunk in Task { @MainActor in self?.onMic(chunk) } }
             audio.onSpeakingChanged = { [weak self] s in Task { @MainActor in
                 self?.speaking = s; self?.lastActivity = Date()
                 if !s { self?.speakEndedAt = Date(); self?.outLevel = 0 }
                 self?.echoSpeaking(s)
+                // ผลงาน Mac ที่ค้างรอเพราะ Friday กำลังพูด → ส่งต่อหลังพูดจบ (เดิมไม่มีใครเรียกซ้ำ ผลค้างจน session ไม่ยอมหลับ)
+                if !s { DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { self?.flushResults() } }
             } }
             audio.outputPriority = config!.outputPriority ?? []
             audio.inputPriority = config!.inputPriority ?? []
@@ -135,11 +134,23 @@ final class FridayController: ObservableObject {
         }
     }
 
+    /// ค่าที่ใช้ตอนคุย (engine/คำยืนยัน/คำลา/idle…) — โหลดใหม่ทุกครั้งที่ปลุก ให้หน้า Settings มีผลทันที (เดิมต้องปิดเปิดแอป)
+    /// ค่าระบบเสียง (vpio/ลำโพงที่ชอบ) ใช้ตอนเปิดแอปเท่านั้น
+    private func applyConfig(_ c: ServerAPI.Config) {
+        config = c
+        affirm = try? NSRegularExpression(pattern: c.affirm, options: .caseInsensitive)
+        negate = try? NSRegularExpression(pattern: c.negate, options: .caseInsensitive)
+        farewell = c.farewell.flatMap { try? NSRegularExpression(pattern: $0, options: .caseInsensitive) }
+        stopWords = c.stopWords.flatMap { try? NSRegularExpression(pattern: $0, options: .caseInsensitive) }
+    }
+
     /// เปิดระบบเสียง วนลองทุก 5 วิจนสำเร็จ (ตอนเปิดเครื่อง ลำโพง/จอนอก/ไมค์ อาจยังไม่พร้อม)
     private var openingAudio = false
     private func openAudio() async {
         guard !openingAudio else { return }        // มี loop รออยู่แล้ว (เสียบอุปกรณ์ใหม่จะปลุกผ่าน onHardwareChange → retryNow)
         openingAudio = true; defer { openingAudio = false }
+        // ไมค์/ลำโพงล้มระหว่างคุย → ปิด session ก่อน (เดิมเปลี่ยน phase ทับ แล้ว session เก่ากำพร้า เล่นเสียง/รันเครื่องมือต่อ)
+        if live != nil || phase == .live || phase == .connecting { sys("⚠️ ระบบเสียงสะดุด — พักการคุยก่อน"); endSession() }
         var attempt = 0, lastErr = ""
         while true {
             do { try audio.start(); break } catch {
@@ -273,7 +284,7 @@ final class FridayController: ObservableObject {
                 if falseWakes.count >= 2, let last = falseWakes.last, Date().timeIntervalSince(last) < cool {
                     Log.write("wake: ข้าม — ตื่นผิดซ้ำ \(falseWakes.count) ครั้ง (พัก \(Int(cool)) วิ)"); return
                 }
-                wakeMsgId = sys("👂 ได้ยิน: \(r.text)"); Log.write("wake: \(r.text)")
+                wakeMsgId = sys("👂 ได้ยิน: \(r.text)"); Log.write("wake: \(r.text.prefix(16))\(r.text.count > 16 ? "… (\(r.text.count) ตัว)" : "")")   // log แค่ต้นประโยค (privacy)
                 wake(prebuffer: clip + postWake, greet: false)   // ส่งเสียงช่วงที่ปลุก + ที่พูดต่อระหว่างเช็ค ("Friday … เปิด Chrome")
             }
         }
@@ -292,6 +303,8 @@ final class FridayController: ObservableObject {
         onWantsPanel?(true)
         Task {
             do {
+                if let fresh = try? await ServerAPI.config(timeout: 2) { applyConfig(fresh) }   // ค่าล่าสุดจากหน้า Settings
+                let config = self.config ?? config
                 let cascade = config.engine == "cascade"          // cascade ไม่ต้องใช้ token ของ Gemini Live
                 async let tokenReq = cascade ? "" : ServerAPI.token()
                 async let extraReq = ServerAPI.contextText()   // ความจำ + บทสนทนาล่าสุด (ขอพร้อมกับ token)
@@ -449,6 +462,8 @@ final class FridayController: ObservableObject {
         ttsCancel()
         audio.flush()
         meIndex = nil; friIndex = nil; connectQueue = []; wakeMsgId = nil
+        // ผลงานที่ยังไม่ได้บอก → เก็บไว้บอกรอบหน้า แต่ระบุว่ามาจากรอบก่อน (เดิมโผล่กลางบทสนทนาใหม่แบบไม่มีบริบท)
+        pendingResults = pendingResults.map { $0.hasPrefix("(จากรอบคุยก่อน)") ? $0 : "(จากรอบคุยก่อน) \($0)" }
         if case .error = phase { return }
         setPhase(.sleeping)
         DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
@@ -535,7 +550,12 @@ final class FridayController: ObservableObject {
                 live?.sendToolResponse(id: id, name: name, response: ["ok": false, "status": "blocked", "result": "ไม่ได้ยินผู้ใช้สั่งงานนี้ด้วยเสียง ต้องให้ผู้ใช้พูดสั่งเอง"])
             }
             else if config?.serverTools?.contains(name) == true {     // remember / vault_lookup / get_usage / run_shortcut
-                Task { let r = await ServerAPI.tool(name, args: args); live?.sendToolResponse(id: id, name: name, response: r) }
+                Task {
+                    let r = await ServerAPI.tool(name, args: args)
+                    // เนื้อหาจาก Vault ไม่ใช่เสียงผู้ใช้ → เครื่องมือ "ลงมือ" ที่โมเดลเรียกต่อจากนี้ต้องให้ผู้ใช้พูดสั่งก่อน (กัน prompt injection, รีวิว 9 ต.ค.)
+                    if name == "vault_lookup" { userSpoke = false }
+                    live?.sendToolResponse(id: id, name: name, response: r)
+                }
             }
             else if name == "end_conversation" || name == "stop_listening" {
                 live?.sendToolResponse(id: id, name: name, response: ["status": "ok", "note": "ปิดแล้ว ไม่ต้องพูดอะไรเพิ่ม"])
@@ -556,6 +576,9 @@ final class FridayController: ObservableObject {
             resumeSession()
         case .falseWake:
             endFalseWake("ตื่นผิด — Scribe ไม่ได้ยินคำปลุก")
+        case .notice(let t):
+            awaitingReply = false
+            sys("⚠️ \(t)"); resultLine = t
         case .closed(let why):
             Log.write("session: closed \(why)")
             if phase == .live || phase == .connecting {
@@ -572,6 +595,8 @@ final class FridayController: ObservableObject {
             var resp: [String: Any]
             do { resp = jobToResponse(try await ServerAPI.runOnMac(task: task, convo: convo, forceConfirm: force), at: idx) }
             catch { update(idx, text: "⚠️ ส่งงานไม่ได้: \(error.localizedDescription)"); resp = ["status": "error", "result": error.localizedDescription] }
+            // ผลงานที่เสร็จทันทีอาจมีเนื้อหาจากเว็บ/ไฟล์ (เหมือน [ผลจาก Mac] ที่ flushResults ล้าง userSpoke อยู่แล้ว)
+            if resp["status"] as? String == "done" { userSpoke = false }
             live?.sendToolResponse(id: id, name: name, response: resp)
         }
     }
@@ -686,20 +711,28 @@ final class FridayController: ObservableObject {
         guard let c = confirms.removeValue(forKey: jobId) else { return ["status": "error", "result": "ไม่พบงาน"] }
         syncConfirm()
         let idx = messages.first { $0.jobId == jobId }?.id ?? sys("")
-        update(idx, text: "\(approve ? "▶️ ยืนยันแล้ว" : "🚫 ยกเลิก") (\(via)): \(c.task)", kind: .sys)
-        if !approve { resultLine = "ยกเลิกแล้ว · \(c.task)" }
+        // ขึ้นผลจริงจาก server (เดิมขึ้น "ยืนยันแล้ว" ก่อนรู้ผล → การ์ดหมดอายุ/server ล่ม ก็ยังโชว์ว่าสำเร็จ)
+        update(idx, text: "⏳ กำลัง\(approve ? "ยืนยัน" : "ยกเลิก") (\(via)): \(c.task)", kind: .sys)
         do {
             let job = try await ServerAPI.confirm(id: jobId, approve: approve, remember: remember)
+            let ok = approve ? ["running", "done", "error"].contains(job.status) : job.status == "cancelled"
+            if ok { update(idx, text: "\(approve ? "▶️ ยืนยันแล้ว" : "🚫 ยกเลิก") (\(via)): \(c.task)") }
+            else { update(idx, text: "⚠️ \(approve ? "ยืนยัน" : "ยกเลิก")ไม่ทัน — งานนี้\(job.status == "cancelled" ? "หมดเวลา/ถูกยกเลิกไปแล้ว" : "สถานะ \(job.status)"): \(c.task)") }
+            if !approve || !ok { resultLine = "\(ok ? "ยกเลิกแล้ว" : "ไม่สำเร็จ") · \(c.task)" }
+            if approve && !ok { return ["status": job.status, "result": "ยืนยันไม่ทัน งานนี้หมดเวลาหรือถูกยกเลิกไปแล้ว ต้องสั่งใหม่"] }
             if via.hasPrefix("ปุ่ม") {                  // Gemini ไม่รู้ว่ากดปุ่ม → แจ้งให้รู้
                 if job.status == "running" { poll(job.id, task: job.task, at: idx) }
                 else {
-                    if approve { markDone(job.status == "done" ? job.task : "ยืนยันแล้ว") }
+                    if approve && job.status == "done" { markDone(job.task) }
                     pendingResults.append(macResult("งาน \"\(job.task)\" \(approve ? "ผู้ใช้กดยืนยันแล้ว ผล: \(job.result ?? "")" : "ผู้ใช้กดยกเลิกแล้ว")")); flushResults()
                 }
                 return [:]
             }
             return approve ? jobToResponse(job, at: idx) : ["status": "cancelled", "result": "ยกเลิกงานแล้ว"]
         } catch {
+            let gone: Bool = { if case ServerAPI.APIError.http(404, _) = error { return true }; return false }()
+            update(idx, text: "⚠️ \(approve ? "ยืนยัน" : "ยกเลิก")ไม่สำเร็จ: \(gone ? "ไม่พบงาน (server รีสตาร์ท?) ต้องสั่งใหม่" : error.localizedDescription) — \(c.task)")
+            resultLine = "ไม่สำเร็จ · \(c.task)"
             return ["status": "error", "result": error.localizedDescription]
         }
     }

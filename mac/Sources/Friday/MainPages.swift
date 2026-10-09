@@ -100,7 +100,7 @@ struct HoverRow<Content: View>: View {
             .background(ui.hover == id && action != nil ? T.hover : .clear)
             .contentShape(Rectangle())
             .onHover { inside in if inside { ui.hover = id } else if ui.hover == id { ui.hover = nil } }
-            .onTapGesture { action?() }
+            .tap { action?() }
     }
 }
 
@@ -158,7 +158,7 @@ struct LinkText: View {
     var weight: Font.Weight = .medium
     let action: () -> Void
     var body: some View {
-        Text(text).font(T.f(14, weight)).foregroundStyle(T.accentText).contentShape(Rectangle()).onTapGesture(perform: action)
+        Text(text).font(T.f(14, weight)).foregroundStyle(T.accentText).contentShape(Rectangle()).tap(action)
     }
 }
 
@@ -220,7 +220,7 @@ struct HomePage: View {
         return HStack(spacing: 16) {
             sentence("Today Friday finished **\(Fmt.plural(done, "task"))** on your Mac and you talked for **\(Fmt.minutes(u?.todayMinutes ?? 0))** — about **\(Fmt.baht(u?.todayThb ?? 0))** of Gemini.")
                 .lineSpacing(4).frame(maxWidth: .infinity, alignment: .leading)
-            HealthPill(level: h.0, text: h.1).onTapGesture { ui.page = .system }
+            HealthPill(level: h.0, text: h.1).tap { ui.page = .system }
         }.card(20, 26)
     }
 
@@ -264,7 +264,7 @@ struct SpendCard: View {
                         Text(amount((u?.monthThb ?? 0) * easeOut(ctx.date, from: ui.countUpAt, duration: 1.1)))
                             .font(T.f(32, .bold)).tracking(-1).monospacedDigit()
                     }
-                    .contentShape(Rectangle()).onTapGesture { ui.replayCountUp() }
+                    .contentShape(Rectangle()).tap { ui.replayCountUp() }
                 }.fixedSize()
                 spark(u?.daysMtd ?? [], now: ctx.date)
                 Rectangle().fill(T.sparkDivider).frame(width: 1, height: 36)
@@ -352,7 +352,7 @@ struct TasksPage: View {
             if t.kind == "pending" {
                 HStack(spacing: 18) {
                     LinkText(text: "Approve →", weight: .semibold) { decide(t, true) }
-                    Text("Deny").font(T.f(14)).foregroundStyle(T.muted).onTapGesture { decide(t, false) }
+                    Text("Deny").font(T.f(14)).foregroundStyle(T.muted).tap { decide(t, false) }
                 }
             }
         }
@@ -507,7 +507,7 @@ struct UsagePage: View {
             if u.tops.isEmpty { Text("Nothing yet.").foregroundStyle(T.faint) }
             ForEach(Array(u.tops.enumerated()), id: \.offset) { i, t in
                 HStack(spacing: 12) {
-                    Text("\(i + 1)").foregroundStyle(T.placeholder).monospacedDigit().frame(width: 18, alignment: .leading)
+                    Text("\(i + 1)").foregroundStyle(T.faint).monospacedDigit().frame(width: 18, alignment: .leading)
                     Text(t.n).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
                     Text("\(t.c)×").foregroundStyle(T.faint)
                 }
@@ -538,8 +538,8 @@ struct MemoryPage: View {
                         TextField("Something Friday should keep in mind…", text: $ui.noteDraft)
                             .textFieldStyle(.plain).font(T.f(15.5))
                             .onSubmit { ui.addNote() }
-                        Text("Save").font(T.f(13, .semibold)).foregroundStyle(T.accentText).onTapGesture { ui.addNote() }
-                        Text("Cancel").font(T.f(13)).foregroundStyle(T.placeholder).onTapGesture { ui.addingNote = false; ui.noteDraft = "" }
+                        Text("Save").font(T.f(13, .semibold)).foregroundStyle(T.accentText).tap { ui.addNote() }
+                        Text("Cancel").font(T.f(13)).foregroundStyle(T.faint).tap { ui.addingNote = false; ui.noteDraft = "" }
                     }
                     .padding(.horizontal, 26).padding(.vertical, 13)
                     .background(T.hover)
@@ -570,9 +570,9 @@ struct ForgetButton: View {
     let id: String
     let action: () -> Void
     var body: some View {
-        Text("Forget").font(T.f(13)).foregroundStyle(ui.hover == id ? T.hex(0xD63C2F) : T.placeholder)
+        Text("Forget").font(T.f(13)).foregroundStyle(ui.hover == id ? T.hex(0xD63C2F) : T.faint)
             .onHover { inside in if inside { ui.hover = id } else if ui.hover == id { ui.hover = nil } }
-            .onTapGesture(perform: action)
+            .tap(action)
     }
 }
 
@@ -634,7 +634,7 @@ struct ToolsPage: View {
                     let locked = n == "run_on_mac", on = locked || !(s?.toolsOff.contains(n) ?? false)
                     HStack(spacing: 16) {
                         VStack(alignment: .leading, spacing: 2) {
-                            (Text(label).font(T.f(15.5)) + Text("  " + n).font(T.mono(12)).foregroundColor(T.placeholder))
+                            (Text(label).font(T.f(15.5)) + Text("  " + n).font(T.mono(12)).foregroundColor(T.faint))
                             Text(d).font(T.f(13)).foregroundStyle(T.faint)
                         }.frame(maxWidth: .infinity, alignment: .leading)
                         Text("\(s?.uses[n] ?? 0) this week").font(T.f(12.5)).foregroundStyle(T.faint)
@@ -642,7 +642,7 @@ struct ToolsPage: View {
                     }
                     .padding(.horizontal, 26).padding(.vertical, 12)
                     .contentShape(Rectangle())
-                    .onTapGesture { if !locked { ui.toggleTool(n) } }
+                    .tap { if !locked { ui.toggleTool(n) } }
                 }
             }.card(8)
             SectionLabel(text: "Home Shortcuts Friday may run")
@@ -661,12 +661,12 @@ struct ToolsPage: View {
             Circle().fill(sc.on ? T.accent : T.hex(0xD8D2CA)).frame(width: 7, height: 7)
             Text(sc.name).font(T.f(14))
         }
-        .foregroundStyle(sc.on ? T.accentDeep : T.placeholder)
+        .foregroundStyle(sc.on ? T.accentDeep : T.faint)
         .padding(.horizontal, 14).frame(height: 34)
         .background(Capsule().fill(sc.on ? T.accentTint : .white)
             .overlay(Capsule().strokeBorder(sc.on ? T.accent.opacity(0.35) : .black.opacity(0.1), lineWidth: 1)))
         .contentShape(Capsule())
-        .onTapGesture { ui.toggleShortcut(sc.name) }
+        .tap { ui.toggleShortcut(sc.name) }
         .animation(.easeOut(duration: 0.15), value: sc.on)
     }
 }
@@ -728,7 +728,7 @@ struct SystemPage: View {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array((ui.system?.log ?? []).enumerated()), id: \.offset) { _, l in
                     HStack(spacing: 16) {
-                        Text(l.time).foregroundStyle(T.placeholder)
+                        Text(l.time).foregroundStyle(T.faint)
                         Text(tagName(l.tag)).fontWeight(.semibold).foregroundStyle(tagColor(l.tag)).frame(width: 52, alignment: .leading)
                         Text(l.msg).foregroundStyle(T.body).lineLimit(1).truncationMode(.tail)
                     }
@@ -746,7 +746,7 @@ struct SystemPage: View {
         case "WAKE": return T.friday
         case "ERR": return T.error
         case "TALK", "POD": return T.secondary
-        default: return T.placeholder
+        default: return T.faint
         }
     }
 }
@@ -771,7 +771,7 @@ struct SettingsPage: View {
                     Switch(on: !c.earMuted)
                 }
                 .padding(.horizontal, 26).padding(.vertical, 14).contentShape(Rectangle())
-                .onTapGesture { c.toggleEar() }
+                .tap { c.toggleEar() }
                 line("Go back to sleep after silence", value: menu(s.map { "\(Int($0.idleMs / 1000)) seconds" } ?? "–", [10, 20, 30, 60].map { ("\($0) seconds", ["idleMs": $0 * 1000]) }))
                 line("Longest single conversation", value: menu(s.map { "\(Int($0.maxSessionSec / 60)) minutes" } ?? "–", [5, 12, 20, 30].map { ("\($0) minutes", ["maxSessionSec": $0 * 60]) }))
             }.card(6)
@@ -809,7 +809,7 @@ struct SettingsPage: View {
                             }.frame(maxWidth: .infinity, alignment: .leading)
                         }
                         .padding(.horizontal, 26).padding(.vertical, 14).contentShape(Rectangle())
-                        .onTapGesture { ui.set(["trust": r.0]) }
+                        .tap { ui.set(["trust": r.0]) }
                     }
                 }
             }.card(6)

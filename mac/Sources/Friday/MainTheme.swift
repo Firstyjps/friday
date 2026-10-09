@@ -54,6 +54,10 @@ struct Card: ViewModifier {
 }
 extension View {
     func card(_ v: CGFloat = 8, _ h: CGFloat = 0) -> some View { modifier(Card(padding: EdgeInsets(top: v, leading: h, bottom: v, trailing: h))) }
+    /// แตะได้ + VoiceOver รู้ว่าเป็นปุ่มและกดได้ (onTapGesture เปล่าๆ VoiceOver มองไม่เห็นว่ากดได้ — รีวิว 9 ต.ค.)
+    func tap(_ action: @escaping () -> Void) -> some View {
+        onTapGesture(perform: action).accessibilityAddTraits(.isButton).accessibilityAction(.default, action)
+    }
 }
 
 /// สวิตช์ 40×24 (ส้มเมื่อเปิด) — ไม่ใช้ Toggle ของระบบให้ตรงดีไซน์
@@ -67,6 +71,7 @@ struct Switch: View {
         }
         .frame(width: 40, height: 24)
         .opacity(locked ? 0.5 : 1)
+        .accessibilityElement().accessibilityAddTraits(.isToggle).accessibilityValue(on ? "เปิด" : "ปิด")
         .animation(.easeOut(duration: 0.15), value: on)
     }
 }
@@ -88,7 +93,7 @@ struct Pill: View {
         .background(Capsule().fill(on ? T.ink : .white).shadow(color: .black.opacity(on ? 0 : 0.04), radius: 1, y: 1)
             .overlay(Capsule().strokeBorder(.black.opacity(on ? 0 : 0.1), lineWidth: 0.5)))
         .contentShape(Capsule())
-        .onTapGesture(perform: action)
+        .tap(action)
         .animation(.easeOut(duration: 0.15), value: on)
     }
 }

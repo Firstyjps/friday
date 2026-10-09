@@ -135,7 +135,7 @@ struct Sidebar: View {
             .shadow(color: .black.opacity(on ? 0.08 : 0), radius: 1.5, y: 1)
             .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(.black.opacity(on ? 0.05 : 0), lineWidth: 0.5)))
         .contentShape(Rectangle())
-        .onTapGesture { withAnimation(.easeOut(duration: 0.15)) { ui.page = p } }
+        .tap { withAnimation(.easeOut(duration: 0.15)) { ui.page = p } }
     }
 
     static func label(_ p: MainUI.Page) -> String { p.rawValue.prefix(1).uppercased() + p.rawValue.dropFirst() }
@@ -178,7 +178,7 @@ struct PageHeader: View {
                     .background(Capsule().fill(.white).shadow(color: .black.opacity(0.06), radius: 1.5, y: 1)
                         .overlay(Capsule().strokeBorder(.black.opacity(0.1), lineWidth: 0.5)))
                     .contentShape(Capsule())
-                    .onTapGesture(perform: a.1)
+                    .tap(a.1)
                     .opacity(ui.restartingAt != nil && ui.page == .system ? 0.5 : 1)
             }
         }

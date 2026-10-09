@@ -252,7 +252,7 @@ async function openAudio() {
     Promise.all([outCtx.resume(), micCtx.resume()]).then(() => true),
     new Promise((r) => setTimeout(() => r(false), 1500)),
   ]);
-  if (!resumed) throw new Error(NEEDS_TAP);
+  if (!resumed) { closeAudio(); throw new Error(NEEDS_TAP); }   // ล้างไมค์ที่เปิดค้าง → แตะวงกลมแล้วเปิดใหม่ครบ (เดิม micStream ค้างไม่มี micNode = ไม่มีเสียงเข้า)
   await micCtx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], { type: 'text/javascript' })));
   micNode = new AudioWorkletNode(micCtx, 'mic');
   micNode.port.onmessage = (e) => onMicChunk(e.data);
@@ -401,7 +401,7 @@ orb.onclick = async () => {
   if (session) { endSession(); if (!ROOM) closeAudio(); return; }
   starting = true;
   try {
-    if (!micStream) await openAudio();
+    if (!micStream || !micNode) { closeAudio(); await openAudio(); }
     await openSession();
   } catch (e) {
     endSession(); if (!ROOM) closeAudio();

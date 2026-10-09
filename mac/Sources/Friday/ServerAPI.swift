@@ -67,8 +67,8 @@ enum ServerAPI {
         return data
     }
 
-    static func config() async throws -> Config {
-        try JSONDecoder().decode(Config.self, from: try await request("/config.json"))
+    static func config(timeout: TimeInterval = 30) async throws -> Config {
+        try JSONDecoder().decode(Config.self, from: try await request("/config.json", timeout: timeout))
     }
 
     static func token() async throws -> String {

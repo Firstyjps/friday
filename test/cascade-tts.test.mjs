@@ -1,6 +1,6 @@
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { Cascade } from '../lib/cascade.mjs';
+import { Cascade, PROMISED } from '../lib/cascade.mjs';
 
 // ทดสอบทางสำรองของ TTS โดยไม่เรียก API จริง: แทน fetch/WebSocket ด้วยตัวปลอม
 const realFetch = globalThis.fetch, realWS = globalThis.WebSocket;
@@ -67,7 +67,7 @@ const geminiOrTts = async (url) => (/flash-lite:stream/.test(String(url))
   : audioSSE());
 const wakeTurn = async (heard) => {
   globalThis.fetch = geminiOrTts;
-  const c = new Cascade({ key: 'test', log: () => {}, wav16k: (p) => p, scribe: async () => heard });
+  const c = new Cascade({ key: 'test', log: () => {}, wav16k: (p) => p, scribe: async () => { if (heard instanceof Error) throw heard; return heard; } });
   c.open('s1', { system: '', cfg: { cascade: { filler: false, googleSearch: false, ttsModels: ['m-a'] }, tools: [] } });
   const ev = [];
   await c.turn('s1', { audio: Buffer.alloc(32000), wake: true }, (o) => ev.push(o));
@@ -85,4 +85,41 @@ test('ปลุกจริง: ข้อความผู้ใช้ออก
   assert.equal(ev[0].t, 'user');
   assert.ok(ev.some((o) => o.t === 'text') && ev.some((o) => o.t === 'audio'));
   assert.deepEqual(ev.at(-1), { t: 'done', pending: 0 });
+});
+
+test('Scribe ล่ม/ไม่มี key บนคลิปปลุก → ปล่อยคำตอบ (ไม่นับเป็นตื่นผิด)', async () => {
+  for (const heard of [new Error('scribe 503'), null]) {
+    const ev = await wakeTurn(heard);
+    assert.ok(ev.some((o) => o.t === 'text') && ev.some((o) => o.t === 'audio'), String(heard));
+    assert.deepEqual(ev.at(-1), { t: 'done', pending: 0 });
+  }
+});
+
+test('Gemini: ได้แค่ส่วนค้น Google แล้วค้าง → ลองใหม่ (ไม่ใช่รอ 30 วิแล้วขอโทษ) และไม่เก็บส่วนค้นซ้ำ', async () => {
+  let n = 0;
+  globalThis.fetch = async (url, o) => {
+    if (!/flash-lite:stream/.test(String(url))) return audioSSE();
+    if (n++ === 0) {                 // ครั้งแรก: ส่งส่วนค้น 1 ก้อนแล้วเงียบ
+      const body = new ReadableStream({ start(ctl) {
+        ctl.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ candidates: [{ content: { parts: [{ toolCall: { search: 1 } }] } }] })}\n\n`));
+        o.signal.addEventListener('abort', () => ctl.error(o.signal.reason));
+      } });
+      return new Response(body);
+    }
+    return new Response(`data: ${JSON.stringify({ candidates: [{ content: { parts: [{ toolCall: { search: 2 } }, { text: 'ราคาทองวันนี้...' }] } }], usageMetadata: {} })}\n\n`);
+  };
+  const c = new Cascade({ key: 'test', log: () => {}, wav16k: (p) => p, scribe: async () => 'x' });
+  c.open('s2', { system: '', cfg: { cascade: { filler: false, firstByteMs: 80, ttsModels: ['m-a'] }, tools: [] } });
+  const ev = [], t0 = Date.now();
+  await c.turn('s2', { text: 'ราคาทองวันนี้' }, (o) => ev.push(o));
+  assert.equal(n, 2);
+  assert.ok(Date.now() - t0 < 3000, 'ต้องลองใหม่เร็ว ไม่รอเพดาน');
+  assert.ok(ev.some((o) => o.t === 'text'));
+  const model = c.sessions.get('s2').contents.at(-1);
+  assert.equal(model.parts.filter((p) => p.toolCall).length, 1, 'ส่วนค้นของรอบที่ค้างต้องไม่ค้างในประวัติ');
+});
+
+test('PROMISED: จับคำสัญญาว่าจะไปทำ ไม่จับ "ทำให้" แบบเป็นเหตุ/ขอโทษ', () => {
+  for (const t of ['เดี๋ยวดูให้นะคะ', 'ขอเช็คให้ก่อนนะคะ', 'รอสักครู่นะคะ', 'เดี๋ยวจัดการให้ค่ะ', 'เดี๋ยวลองดูนะคะ', 'กำลังค้นหาให้ค่ะ', 'ได้ค่ะ เดี๋ยวทำให้นะคะ']) assert.ok(PROMISED.test(t), t);
+  for (const t of ['ขอโทษที่ทำให้รอนะคะ', 'แบบนี้จะทำให้ดีขึ้นค่ะ', 'ฝนจะทำให้อากาศเย็นลง', 'วันนี้อากาศดีค่ะ']) assert.ok(!PROMISED.test(t), t);
 });

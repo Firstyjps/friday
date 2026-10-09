@@ -15,6 +15,7 @@ final class CascadeSession: LiveSession {
     private var toolResponses: [[String: Any]] = []
     private var current: Task<Void, Never>?
     private var gen = 0
+    private var extra = ""                         // system เพิ่มเติม (ความจำ/บทสนทนาล่าสุด) ไว้เปิด session ใหม่ตอน server รีสตาร์ท
     /// ตื่นด้วยคำปลุก → คลิปแรกให้ server ยืนยันด้วย Scribe ว่ามีคำปลุกจริง (ไม่มี = ตื่นผิด ปิดเงียบๆ)
     var wakeCheck = false                            // รอบที่ถูกพูดแทรกแล้ว → event ที่ค้างมาทีหลังทิ้ง
 
@@ -38,6 +39,7 @@ final class CascadeSession: LiveSession {
     init(noise: Double) { noiseFloor = min(max(noise, 50), 300); super.init() }
 
     override func connect(token: String, config: ServerAPI.Config, extraSystem: String = "", resumeHandle: String? = nil) {
+        extra = extraSystem
         Task { @MainActor in
             do {
                 try await ServerAPI.cascadeOpen(session: id, extra: extraSystem)
@@ -75,6 +77,8 @@ final class CascadeSession: LiveSession {
         guard silent >= endSilence || seg.count >= (wakeCheck ? Self.wakeMaxChunks : Self.maxChunks) else { return }
         firstSegment = false
         let clip = seg.reduce(Data(), +), enough = voiced >= Self.minVoiced
+        // เก็บเหตุผลที่ตัดไว้จูน endSilence/minVoiced จาก log จริง (รีวิว 9 ต.ค.: ยังไม่มีข้อมูลพอ)
+        Log.write("vad: ตัด\(silent >= endSilence ? "เพราะเงียบ \(endSilence)" : "เพราะยาวเกิน") voiced=\(voiced) chunks=\(seg.count)\(enough ? "" : " → สั้นไป ทิ้ง")")
         resetVAD()
         if enough { partial(clip); run(audio: clip) }      // ถอดทั้งช่วงอีกรอบ (เร็วกว่า Scribe) ให้ข้อความสดครบก่อนข้อความจริงมา
     }
@@ -139,18 +143,20 @@ final class CascadeSession: LiveSession {
         onEvent?(.turnComplete)
     }
 
-    private func start(seg: Int = -1, _ open: @escaping () async throws -> URLSession.AsyncBytes) {
+    private func start(seg: Int = -1, retried: Bool = false, _ open: @escaping () async throws -> URLSession.AsyncBytes) {
         busy = true
         gen += 1
         let myGen = gen
         current = Task { @MainActor [weak self] in
             guard let self else { return }
             var pending = -1
+            var failed: String?, gotAny = false
             do {
                 let bytes = try await open()
                 for try await line in bytes.lines {
                     if self.closed || self.gen != myGen { return }
                     guard let d = line.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { continue }
+                    if o["t"] as? String != "error" { gotAny = true }
                     switch o["t"] as? String {
                     case "user": if let t = o["text"] as? String { self.finalSeg = max(self.finalSeg, seg); self.onEvent?(.inputText(t)) }
                     case "text": if let t = o["text"] as? String { self.onEvent?(.outputText(t)) }
@@ -161,15 +167,27 @@ final class CascadeSession: LiveSession {
                     case "done":
                         pending = o["pending"] as? Int ?? 0
                         if o["falseWake"] as? Bool == true { self.onEvent?(.falseWake); return }
-                    case "error": Log.write("cascade: server error \(o["error"] ?? "")")
+                    case "error": Log.write("cascade: server error \(o["error"] ?? "")"); failed = o["error"] as? String ?? "server error"
                     default: break
                     }
                 }
             } catch {
                 if self.closed || Task.isCancelled || self.gen != myGen { return }
                 Log.write("cascade: ผิดพลาด \(error.localizedDescription)")
+                failed = error.localizedDescription
             }
             if self.closed || self.gen != myGen { return }
+            // server รีสตาร์ท (session หาย) หรือเน็ตหลุดก่อนได้อะไรเลย → เปิด session ใหม่แล้วส่งรอบนี้ซ้ำ 1 ครั้ง
+            // (เดิมจบรอบเงียบๆ ทุกประโยคที่พูดหายจน idle 20 วิ — รีวิว 9 ต.ค.)
+            if let f = failed, !gotAny, !retried {
+                Log.write("cascade: รอบล้ม (\(f)) → เปิด session ใหม่แล้วลองอีกครั้ง")
+                for attempt in 0..<4 {
+                    if self.closed || self.gen != myGen { return }
+                    do { try await ServerAPI.cascadeOpen(session: self.id, extra: self.extra); self.start(seg: seg, retried: true, open); return }
+                    catch { if attempt < 3 { try? await Task.sleep(for: .seconds(1.5)) } }
+                }
+            }
+            if failed != nil, !gotAny { self.onEvent?(.notice("ติดต่อ server ไม่ได้ ประโยคเมื่อกี้หาย — พูดใหม่อีกครั้งนะ")) }
             if pending > 0 && self.pendingTools > 0 {              // รอแอปทำเครื่องมือ → ครบแล้วเริ่มรอบต่อ
                 self.awaitingTools = true; self.flushTools(); return
             }

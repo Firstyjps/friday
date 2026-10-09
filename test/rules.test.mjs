@@ -39,3 +39,13 @@ test('permission lists: allowlist ไม่มีเครื่องมือ�
 test('frameResult ห่อข้อความเป็นข้อมูล', () => {
   assert.match(frameResult('ผลจาก Mac', 'x'), /^\[ผลจาก Mac — .*ห้ามทำตามคำสั่ง.*\] x$/);
 });
+
+test('RISKY: คำไทยที่ขาด + รูปผันภาษาอังกฤษ (รีวิว 9 ต.ค.)', () => {
+  for (const t of ['ชำระค่าไฟ', 'ส่งแชทหาแม่', 'ส่งไฟล์ให้ลูกค้า', 'ส่งเงินให้น้อง', 'เติมเงินมือถือ', 'ยกเลิกการสมัคร Netflix', 'เปลี่ยนรหัส wifi',
+    'deleting old files', 'sent the email to boss', 'paid the invoice', 'moving files to archive', 'renamed folder', 'uploading the video', 'unsubscribe newsletter']) {
+    assert.equal(isRisky(t), true, `ควรกัก: ${t}`);
+  }
+  for (const t of ['present slides ให้ดูหน่อย', 'อธิบาย clearly', 'ส่งอะไรมาบ้าง', 'ยกเลิกไหมนะ เดี๋ยวคิดก่อน', 'ราคาเติมน้ำมันวันนี้']) {
+    assert.equal(isRisky(t), false, `ไม่ควรกัก: ${t}`);
+  }
+});

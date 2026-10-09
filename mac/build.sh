@@ -23,8 +23,14 @@ ICONSET="$(mktemp -d)/Friday.iconset"
 "$BIN_DIR/Friday" --make-iconset "$ICONSET"
 
 # 2) ตัวแอป — เฉพาะเมื่อเปลี่ยน
-STAMP=$(cat "$BIN_DIR/Friday" Info.plist "$ICONSET"/*.png | shasum -a 256 | cut -c1-16)
-if [[ "$(cat "$APP/Contents/Resources/.stamp" 2>/dev/null)" != "$STAMP" ]]; then
+# stamp คิดจาก source ของตัวเปิด (ไม่ใช่ไบนารี ซึ่งฝัง path ที่ build → build จาก worktree อื่นเคยทำให้ติดตั้งใหม่ + ถามสิทธิ์ไมค์ซ้ำ)
+STAMP=$(cat Sources/Launcher/main.swift Package.swift Info.plist "$ICONSET"/*.png | shasum -a 256 | cut -c1-16)
+OLD_STAMP=$(cat "$BIN_DIR/Friday" Info.plist "$ICONSET"/*.png | shasum -a 256 | cut -c1-16)   # สูตรเดิม (ก่อน 9 ต.ค.)
+INSTALLED="$(cat "$APP/Contents/Resources/.stamp" 2>/dev/null)"
+if [[ "$INSTALLED" == "$OLD_STAMP" && -d "$APP" ]]; then echo "$STAMP" > "$APP/Contents/Resources/.stamp"; INSTALLED="$STAMP"; fi   # ย้ายมาใช้สูตรใหม่โดยไม่ติดตั้งใหม่
+if [[ "$INSTALLED" != "$STAMP" && -n "${FRIDAY_NO_OPEN:-}" && -d "$APP" ]] && pgrep -x Friday >/dev/null; then
+  echo "⚠️  ตัวแอปเปลี่ยน แต่ FRIDAY_NO_OPEN → ไม่ปิดแอปที่เปิดอยู่ (build ใหม่โดยไม่ใส่ FRIDAY_NO_OPEN เพื่อติดตั้งตัวแอป)"
+elif [[ "$INSTALLED" != "$STAMP" ]]; then
   echo "⚠️  ตัวแอปเปลี่ยน → ติดตั้งใหม่ (macOS จะถามสิทธิ์ไมค์อีกครั้ง)"
   pkill -x Friday 2>/dev/null || true
   rm -rf "$APP"

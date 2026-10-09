@@ -1,13 +1,13 @@
 # Friday — ผู้ช่วยเสียงส่วนตัว
 
-พูด **"Friday"** → คุยภาษาไทยกับ Gemini Live → สั่งงาน Mac ผ่าน Claude Code (มีด่านยืนยันงานเสี่ยง)
+พูด **"Friday"** → คุยภาษาไทย (engine `cascade`: แอปตัดช่วงพูด → server ถอดเสียงด้วย ElevenLabs Scribe + ตอบด้วย Gemini text + อ่านด้วย Gemini TTS) → สั่งงาน Mac ผ่าน Claude Code (มีด่านยืนยันงานเสี่ยง) · `config.engine = "live"` = Gemini Live แบบเดิม
 
 ## ส่วนประกอบ
 
 | ชิ้น | ที่อยู่ | หน้าที่ |
 |---|---|---|
-| **Friday.app** (Swift, menu bar) | `mac/` → `~/Applications/Friday.app` | หูฟังคำปลุก + คุย (AVAudioEngine + Apple voice processing ตัดเสียงสะท้อน) + หน้าต่างลอย |
-| **server** (Node) | `server.mjs` · LaunchAgent `com.kron.friday` · :4850 | ออก token Gemini, `/api/mac` → Claude Code, ด่านยืนยัน, `/api/wake` → whisper, หูสำรอง |
+| **Friday.app** (Swift, menu bar) | `mac/` → `~/Applications/Friday.app` | หูฟังคำปลุก + คุย (AVAudioEngine · Friday พูด = ปิดไมค์ + หางเสียง ≥0.8 วิ · ตัดเสียงสะท้อน VPIO/พูดแทรก EchoGate ปิดอยู่ เปิดด้วย `config.vpio` / `config.bargeIn`) + overlay ขอบจอ + หน้าต่างหลัก (Open Friday… ⌘O) |
+| **server** (Node) | `server.mjs` · LaunchAgent `com.kron.friday` · :4850 | `/api/turn` (cascade, NDJSON) · `/api/mac` → Claude Code + ด่านยืนยัน · `/api/wake` + `/api/partial` → whisper · `/api/app/*` หน้าต่างหลัก · หูสำรอง |
 | **whisper-server** | LaunchAgent `com.kron.friday-whisper` · :4851 | ถอดเสียงช่วงสั้นๆ เช็คคำปลุก (ggml-small, ไทย) ในเครื่อง |
 | **เว็บ** | `public/` · https://macbook-air--kronkasem.tailf92605.ts.net | ใช้บน iPhone (Tailscale) · `?room=1` = โหมดห้องบนเบราว์เซอร์ (สำรอง) |
 | **config กลาง** | `public/config.json` | model, system prompt, tools, คำยืนยัน — ใช้ทั้งแอปและเว็บ |
@@ -17,6 +17,7 @@ LaunchAgent `com.kron.friday-room` เปิด Friday.app ตอน login
 ## ใช้งาน
 
 - พูด **"Friday"** (หรือ "Friday เปิด Chrome ให้หน่อย" รวดเดียว) → ติ๊ง → คุย · เงียบ 20 วิ → กลับไปรอคำปลุก
+- คลิปแรกหลังคำปลุกถูกยืนยันด้วย Scribe อีกชั้น: ไม่มีคำปลุกจริง / ปลุกแล้วไม่มีเสียงพูดใน 10 วิ (`wakeConfirmSec`) = ตื่นผิด → กลับไปหลับเงียบๆ · ตื่นผิด ≥2 ครั้งใน 3 นาที → ไม่รับคำปลุกจากเสียง 60 วิ (`wakeCooldownSec`, กดเรียก/คีย์ลัดยังได้)
 - **⌥⌘F** = เรียกคุยจากที่ไหนก็ได้ · ไอคอน menu bar = คุย/หยุด, ปิดไมค์ชั่วคราว, แสดงหน้าต่าง, ปิดหู, เปิด log
 - **ปุ่มไมค์บนแถบ Island** (ขวาสุด) = ปิดไมค์ชั่วคราวระหว่างคุย — Friday ไม่ได้ยินเรา แต่ยังพูด/ทำงานค้างต่อได้ (ปุ่มเหลือง = ปิดอยู่) · ปิดไมค์ค้างเกิน 3 นาที → จบ session เอง · ต่างจาก "ปิดหู" ที่จบ session และปล่อยไมค์ทั้งหมด
 - **HomePod mini**: **"หวัดดี Siri เลขาส่วนตัว"** → Siri ถาม "ถามอะไร Friday คะ" → พูดคำถาม → Siri อ่านคำตอบ (Shortcut `shortcuts/เลขาส่วนตัว.shortcut` → `POST /api/ask` ผ่าน Tailscale · Gemini text `textModel` + tools ชุดเดียวกับ Friday) · งานเสี่ยงตอบ "เลขาส่วนตัว ยืนยัน/ยกเลิก" · งานนาน → ตอบ "กำลังทำ" แล้วพูดผลออก HomePod เอง
@@ -30,16 +31,16 @@ LaunchAgent `com.kron.friday-room` เปิด Friday.app ตอน login
 - `vault_lookup` — ค้นสถานะโปรเจกต์ใน `~/Vault/10-projects` ตอบทันที (ไม่ต้องรอ Claude)
 - fast lane ฝั่ง server (0.2 วิ ไม่ผ่าน Claude): `open_app`, `open_url`, `system_info` (วันเวลา/ดิสก์/แบต) · `run_shortcut` คุมบ้าน
 - ความจำเกิน 60 บรรทัด → Claude ย่อให้เหลือ ≤ 30 อัตโนมัติ (สำรองที่ `memory.md.bak`) · token Gemini เตรียมไว้ล่วงหน้า (ปลุกเร็วขึ้น ~0.5 วิ) · Gemini ส่ง goAway → ต่อ session เดิมอัตโนมัติ (session resumption)
-- `get_usage` / เมนู 💰 — ค่าใช้จ่ายเดือนนี้จาก token ที่ Gemini รายงาน (`data/usage.jsonl`, ราคาใน `config.json → pricing`) · โมเดลนี้ **ไม่มี free tier**
+- `get_usage` / เมนู 💰 / หน้า Usage — ค่าใช้จ่ายจาก token ที่ Gemini รายงาน (`data/usage.jsonl`, ราคา cascade ใน `lib/cascade.mjs → PRICES` แก้ได้ที่ `config.cascade.prices`) · นับจำนวนครั้งค้น Google (`searches`, ฟรี 5,000/เดือน) แยกไว้ · TTS โควตา 100 ครั้ง/วัน/รุ่น เต็ม → พักรุ่นนั้นไม่เกิน 1 ชม. แล้วลองใหม่ ระหว่างนั้นใช้ Gemini Live อ่านแทน (ช้ากว่า)
 - `run_shortcut` — สั่ง Apple Shortcuts (คุมบ้านผ่าน HomePod mini) เฉพาะชื่อใน `config.json → shortcutsAllowed`
-- คำสั่งเสียง: "ปิด" = ปิดไมค์จริง (⌥⌘F เรียกกลับ) · "บาย/พอแล้ว" = จบบทสนทนา รอคำปลุกต่อ
+- คำสั่งเสียง: "ปิดไมค์/ปิดหู/หยุดฟัง" = ปิดหูจริง ไม่ฟังคำปลุกจนเรียกด้วย ⌥⌘F/เมนู (`stopWords`) · "ปิด" เฉยๆ / "บาย/พอแล้ว" = จบบทสนทนา รอคำปลุกต่อ (`farewell`)
 
 ## ด่านความปลอดภัย
 
 1. **เสียงผู้ใช้เท่านั้นที่สั่งงานได้** — `run_on_mac` / `remember` / `run_shortcut` ต้องตามหลังเสียงผู้ใช้จริง ถ้า Gemini เรียกหลังจากได้ข้อความจากเรา (ผลงาน Claude, Vault) จะถูกกักไว้ถาม (กัน prompt injection จากเว็บที่ Claude ไปอ่าน)
 2. **คำสั่งที่มีคำเสี่ยง** (ลบ/เคลียร์/ย้าย/ส่ง/เงิน/เทรด/ติดตั้ง/deploy/ปิดเครื่อง…) ถูกกักไว้ทันที (`lib/rules.mjs` → RISKY)
-3. **Claude ของ Friday = Claude Agent SDK** (`lib/claude-agent.mjs`, 1 process ค้างต่อ convo, ไม่ cold start) · **ไม่มี `allowedTools`** (ถ้ามีจะข้าม `canUseTool`) ทุก tool ผ่าน `policy.decide` · อ่าน/ค้น/เว็บผ่านเอง · **เครื่องมืออื่น (เขียน/แก้/ลบไฟล์ รันคำสั่ง) หยุดรอที่ `canUseTool`** → job เป็น `needs_confirmation` พร้อมคำสั่งจริงที่จะรัน (เช่น "รันคำสั่ง: mv …") → ผู้ใช้ยืนยันด้วยเสียง/ปุ่ม → allow และ tool ต่อๆ ไปของงานนั้นผ่าน · deny → Claude หยุดแล้วสรุป · `HARD_DENY` (sudo/diskutil/dd/rm -rf ~) เสมอ · ไม่โหลด settings/CLAUDE.md ของผู้ใช้ · turn ละไม่เกิน 10 นาที · session ว่าง 30 นาทีปิดเอง · `FRIDAY_AGENT=cli` = กลับไปใช้ `claude -p` แบบเดิม
-4. **ระดับสิทธิ์ `trust` ใน config.json** (`lib/policy.mjs`): `full` (ปัจจุบัน) = Claude รันได้เองเกือบทุกอย่าง ถามเฉพาะ sudo/ssh/scp/ดิสก์/ปิดเครื่อง และไฟล์ใน `protectedPaths` (คีย์, .env, โฟลเดอร์บอทเทรด) · `relaxed` = ปล่อยเฉพาะอ่าน/ดึงข้อมูล/เขียนไฟล์โฟลเดอร์ปกติ ถามที่ย้อนกลับไม่ได้ · `ask` = ถามทุกอย่าง · `npm test` มีชุดทดสอบนโยบาย
+3. **Claude ของ Friday = Claude Agent SDK** (`lib/claude-agent.mjs`, 1 process ค้างต่อ convo, ไม่ cold start) · **ไม่มี `allowedTools`** (ถ้ามีจะข้าม `canUseTool`) ทุก tool ผ่าน `policy.decide` ตามระดับ `trust` · SDK อนุญาต Read/Glob/Grep ใต้ HOME เองโดยไม่ถาม `canUseTool` → ไฟล์ลับ/คำสั่งห้ามดักซ้ำที่ hook `PreToolUse` · tool ที่ต้องยืนยัน → job เป็น `needs_confirmation` พร้อมคำสั่งจริง → ผู้ใช้ยืนยันด้วยเสียง/ปุ่ม → **ทั้งงานนั้นทำต่อได้** (ยกเว้นไฟล์ลับ/คำสั่งห้าม) · deny → Claude หยุดแล้วสรุป · **ห้ามเสมอ** (`hardDeny`: sudo/shutdown/reboot/diskutil/dd/mkfs, rm -r ที่ root/HOME — ตรวจแม้ห่อด้วย env/sh -c/$(…)/path เต็ม) · ไม่โหลด settings/CLAUDE.md ของผู้ใช้ · งานยังไม่ยืนยัน 10 นาที / ยืนยันแล้ว 30 นาที · session ว่าง 30 นาทีปิดเอง แล้วรอบหน้า resume ต่อจาก session เดิม · `FRIDAY_AGENT=cli` = กลับไปใช้ `claude -p` แบบเดิม
+4. **ระดับสิทธิ์ `trust` ใน config.json** (`lib/policy.mjs`): `full` (ปัจจุบัน) = Claude รันได้เองเกือบทุกอย่าง ถามเฉพาะ ssh/scp/rsync/su/ดิสก์ (ทุกคำสั่งในบรรทัด รวมหลัง newline/`&`/wrapper) และไฟล์ใน `protectedPaths` · ตอน full คำเสี่ยง RISKY (ข้อ 2) คือด่านหลักก่อนเริ่มงาน · `relaxed` = ปล่อยเฉพาะอ่าน/ดึงข้อมูล/เขียนไฟล์โฟลเดอร์ปกติ ถามที่ย้อนกลับไม่ได้ · `ask` = ถามทุกอย่าง รวมดูเว็บ · `npm test` มีชุดทดสอบนโยบาย + ช่องหลบที่เคยเจอ (`test/policy-bypass.test.mjs`)
 5. ยืนยันด้วยเสียงต้องเป็นประโยคสั้นๆ **หลัง** Friday ถาม (ใช่/ยืนยัน/ตกลง) หรือกดปุ่ม · พูด "ยืนยันตลอด" หรือกด "ยืนยันตลอด · ไม่ถามอีก" → จำประเภทคำสั่ง/โฟลเดอร์นั้นไว้ที่ `data/permissions.json` ไม่ถามอีก · หมดอายุ 5 นาที (ระหว่างนั้น Claude รอ)
 6. Claude ของ Friday ไม่มี MCP เลย (ไม่มี paybox/ms365 ฯลฯ)
 7. API: header `X-Friday` + Origin allowlist + `Tailscale-User-Login` ต้องตรง `TAILSCALE_USER` ใน `.env` (tailscale serve ใส่ header นี้เอง ปลอมไม่ได้)
@@ -63,5 +64,6 @@ FRIDAY_DEMO_MODE=confirm ~/Applications/Friday.app/Contents/MacOS/Friday --overl
 
 - แอป = Launcher เล็กๆ (ad-hoc sign, macOS ผูกสิทธิ์ไมค์ไว้) + โค้ดจริง `~/Library/Application Support/Friday/libFridayCore.dylib` → build ใหม่แทนที่แค่ dylib ไม่ถามสิทธิ์ซ้ำ · ถ้าแก้ `Sources/Launcher`/`Info.plist`/ไอคอน จะถามอีกครั้ง
 - ปิดฝา (clamshell) ใช้ไมค์ภายนอก (หูฟัง / ลำโพงไมค์ประชุม USB) · Amphetamine ต้องไม่ติ๊ก "Allow system sleep when display is closed"
-- `.env` = `GEMINI_API_KEY`, `ALLOWED_ORIGINS`, `TAILSCALE_USER` (ห้าม commit)
+- `.env` = `GEMINI_API_KEY`, `ELEVENLABS_API_KEY` (Scribe ถอดเสียง/ยืนยันคำปลุก), `ALLOWED_ORIGINS`, `TAILSCALE_USER` (ห้าม commit)
+- `data/wake-debug-until` (timestamp ms) = เก็บ 12 ตัวอักษรแรกของคำปลุกที่ whisper ได้ยินลง `~/logs/friday-wake-debug.log` จนถึงเวลานั้น (ไว้จูนคำปลุก ลบหลังวิเคราะห์)
 - session ต่อรอบไม่เกิน `maxSessionSec` (12 นาที) แล้วกลับไปรอคำปลุก · LaunchAgent server ใช้ `caffeinate -s` (กัน sleep เฉพาะตอนเสียบไฟ)

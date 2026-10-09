@@ -33,8 +33,7 @@ enum ServerAPI {
         var maxSessionSec: Double? = nil
         var actionTools: [String]? = nil     // เครื่องมือที่ลงมือทำ → ต้องตามหลังเสียงผู้ใช้
         var engine: String? = nil            // live | cascade (CascadeSession)
-        var bargeIn: Bool? = nil             // พูดแทรกด้วย EchoGate ทุกลำโพง — ปิดไว้: ลำโพงจอ ไมค์ได้ยิน Friday ดังเกือบเท่าต้นฉบับ แยกไม่ออก 9 ต.ค.
-        var bargeInOutputs: [String]? = nil  // ลำโพงที่พูดแทรกได้เสมอ (หูฟัง: ไมค์ไม่ได้ยิน Friday) ค่าเริ่ม Headphones/AirPods
+        var bargeIn: Bool? = nil             // พูดแทรกด้วย EchoGate — ปิดไว้ตามที่ user เลือก (Friday พูด = ปิดไมค์) 9 ต.ค.
     }
 
     enum APIError: LocalizedError {
@@ -185,6 +184,16 @@ enum ServerAPI {
 
     static func ping(_ info: [String: Any]) async {
         _ = try? await request("/api/ping", method: "POST", json: info)
+    }
+
+    // ---------- หน้าต่างหลัก Friday.app (/api/app/*) ----------
+    static func app<T: Decodable>(_ path: String, as: T.Type = T.self) async throws -> T {
+        try JSONDecoder().decode(T.self, from: try await request("/api/app/\(path)", timeout: 10))
+    }
+
+    @discardableResult
+    static func appPost(_ path: String, json: [String: Any]) async -> Bool {
+        (try? await request("/api/app/\(path)", method: "POST", json: json, timeout: 10)) != nil
     }
 }
 

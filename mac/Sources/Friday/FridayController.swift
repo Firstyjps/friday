@@ -228,7 +228,8 @@ final class FridayController: ObservableObject {
                 audio.echo.heard(chunk)
                 // พูดแทรกปิดไว้ (config.bargeIn): 9 ต.ค. ไมค์ได้ยิน Friday ดังเกือบเท่าเสียงที่ส่งออก (gain 0.82) → คิดว่า Friday เป็นผู้ใช้ แล้วคุยกับตัวเองวน
                 // → ปิดไมค์ระหว่าง Friday พูด + หางเสียงอย่างน้อย 0.8 วิ (ตามความหน่วงที่วัดได้) เหมือนเดิม · EchoGate ยังเรียนรู้ค่าไว้
-                let canBarge = audio.aecEnabled || config?.bargeIn == true || (config?.bargeInOutputs ?? ["Headphones", "AirPods", "หูฟัง"]).contains { audio.outputName.localizedCaseInsensitiveContains($0) }
+                // user ตัดสินใจ 9 ต.ค.: ไม่เอาพูดแทรก — Friday พูด = ปิดไมค์ (ไม่ต้องกังวลว่า Friday จะได้ยินตัวเอง) · เปิดได้ด้วย config.bargeIn = true
+                let canBarge = config?.bargeIn == true
                 if !canBarge {
                     if voiceBusy || Date().timeIntervalSince(speakEndedAt) < max(0.8, audio.echo.delay + 0.6) { micLevel = 0; return }
                 } else if !barged && (voiceBusy || audio.echo.echoActive()) {

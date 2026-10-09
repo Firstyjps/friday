@@ -278,7 +278,9 @@ async function detectWake(pcm) {
   const form = new FormData();
   form.append('file', new Blob([pcmToWav(pcm)], { type: 'audio/wav' }), 'clip.wav');
   form.append('response_format', 'json');
-  // ไม่ใส่ prompt คำปลุกแล้ว: 8 ต.ค. ใส่ 'Friday ฟรายเดย์' → whisper ทวนคำใบ้ออกมาเองจากเสียงวางของ/เสียงห้อง (9 ต.ค. 26/27 ครั้งที่ตื่นเป็นคำปลุกซ้ำล้วน)
+  // คำใบ้ช่วยให้ถอดคำปลุกถูก (9 ต.ค. เอาออกแล้ว user เรียกไม่ติด: ถอดเป็น "พลายดีจ๊ะ")
+  // แต่ทำให้ whisper ทวนคำใบ้จากเสียงห้อง → กันด้วย isWakeEcho (ซ้ำล้วนไม่นับ) + Scribe ยืนยันคลิปแรก + ตื่นผิดเงียบ/พักในแอป
+  form.append('prompt', 'Friday ฟรายเดย์');
   const t0 = Date.now();
   const r = await fetch(WHISPER, { method: 'POST', body: form, signal: AbortSignal.timeout(8000) });
   const text = ((await r.json()).text || '').trim();

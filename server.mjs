@@ -6,7 +6,7 @@ import { readFile, appendFile, writeFile, mkdir, readdir, rename } from 'node:fs
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { extname, join } from 'node:path';
-import { RISKY, READ_ONLY_TOOLS, HARD_DENY, SECRET_DENY, agentEnv, CONFIRM_MARK, WAKE, isWakeEcho, replyIntent, frameResult } from './lib/rules.mjs';
+import { RISKY, READ_ONLY_TOOLS, HARD_DENY, SECRET_DENY, agentEnv, CONFIRM_MARK, WAKE, wakeDecision, replyIntent, frameResult } from './lib/rules.mjs';
 import { AgentSession } from './lib/claude-agent.mjs';
 import { decide as policyDecide, secretCheck, hardDeny, ruleKey, RuleStore } from './lib/policy.mjs';
 import { speak as homepodSpeak, askText } from './lib/homepod.mjs';
@@ -274,20 +274,22 @@ function pcmToWav(pcm) {
   return Buffer.concat([h, pcm]);
 }
 
-async function detectWake(pcm) {
+async function whisperText(wav, prompt, ms = 8000) {
   const form = new FormData();
-  form.append('file', new Blob([pcmToWav(pcm)], { type: 'audio/wav' }), 'clip.wav');
+  form.append('file', new Blob([wav], { type: 'audio/wav' }), 'clip.wav');
   form.append('response_format', 'json');
-  // คำใบ้ช่วยให้ถอดคำปลุกถูก (9 ต.ค. เอาออกแล้ว user เรียกไม่ติด: ถอดเป็น "พลายดีจ๊ะ")
-  // แต่ทำให้ whisper ทวนคำใบ้จากเสียงห้อง → กันด้วย isWakeEcho (ซ้ำล้วนไม่นับ) + Scribe ยืนยันคลิปแรก + ตื่นผิดเงียบ/พักในแอป
-  form.append('prompt', 'Friday ฟรายเดย์');
-  const t0 = Date.now();
-  const r = await fetch(WHISPER, { method: 'POST', body: form, signal: AbortSignal.timeout(8000) });
-  const text = ((await r.json()).text || '').trim();
+  if (prompt) form.append('prompt', prompt);
+  const r = await fetch(WHISPER, { method: 'POST', body: form, signal: AbortSignal.timeout(ms) });
+  return ((await r.json()).text || '').trim();
+}
+// คำปลุก 2 จังหวะ (ดู wakeDecision): รอบแรกมีคำใบ้ (ไม่มีแล้ว user เรียกไม่ติด) · ได้แค่ "ฟรายเดย์" ล้วน = เหมือนเสียงหลอน → ฟังรอบสองไม่มีคำใบ้
+async function detectWake(pcm) {
+  const wav = pcmToWav(pcm), t0 = Date.now();
+  const text = await whisperText(wav, 'Friday ฟรายเดย์');
   whisperMs = whisperMs == null ? Date.now() - t0 : Math.round(whisperMs * 0.8 + (Date.now() - t0) * 0.2);
-  const bare = text.replace(/\[[^\]]*\]|\([^)]*\)/g, ' ').trim();   // ตัด [เสียงดนตรี] ที่ whisper ใส่หน้าคำปลุกตอนมีเพลง
-  const m = isWakeEcho(bare) ? null : bare.match(WAKE);
-  return { text, wake: !!m, phrase: m ? m[0].trim() : '', echo: !m && isWakeEcho(bare) };
+  let d = wakeDecision(text), plain = null;
+  if (d.wake === null) { plain = await whisperText(wav, null, 5000).catch(() => ''); d = wakeDecision(text, plain); }
+  return { text, plain, wake: !!d.wake, phrase: d.phrase ?? '', echo: !d.wake && !!d.why, why: d.why ?? '' };
 }
 
 // ข้อความสดระหว่างผู้ใช้พูด (แอป Mac โหมด cascade) — whisper ในเครื่อง ~0.4 วิ/ประโยค ไว้โชว์บน overlay อย่างเดียว
@@ -769,10 +771,10 @@ http.createServer(async (req, res) => {
       }
       if (req.method === 'POST' && url.pathname === '/api/wake') {
         const r = await detectWake(await readRaw(req));
-        if (r.wake) log(`WAKE | ${r.phrase}`); else log(`wake check: no (${r.text.length} chars${r.echo ? ', คำปลุกซ้ำล้วน' : ''})`);   // ไม่ log ข้อความ (privacy)
+        if (r.wake) log(`WAKE | ${r.phrase}${r.plain != null ? ' (ยืนยันรอบสอง)' : ''}`); else log(`wake check: no (${r.text.length} chars${r.why ? `, ${r.why}` : ''})`);   // ไม่ log ข้อความ (privacy)
         // โหมดหาสาเหตุชั่วคราว (user อนุญาต): ไฟล์ data/wake-debug-until มี timestamp → เก็บแค่ 12 ตัวอักษรแรก แยกไฟล์ ลบหลังวิเคราะห์
         const until = +(await readText(join(DATA, 'wake-debug-until'))) || 0;
-        if (Date.now() < until) appendFile(join(HOME, 'logs', 'friday-wake-debug.log'), `${new Date().toISOString().slice(11, 19)} | ${r.wake ? 'WAKE' : 'no  '} | ${r.text.slice(0, 12)}\n`).catch(() => {});
+        if (Date.now() < until) appendFile(join(HOME, 'logs', 'friday-wake-debug.log'), `${new Date().toISOString().slice(11, 19)} | ${r.wake ? 'WAKE' : 'no  '} | ${r.text.slice(0, 12)}${r.plain != null ? ` | รอบสอง: ${r.plain.slice(0, 12)}` : ''}\n`).catch(() => {});
         return json(res, 200, r);
       }
       if (req.method === 'POST' && url.pathname === '/api/partial') {      // ไม่ log ข้อความ (privacy)

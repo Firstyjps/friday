@@ -40,3 +40,16 @@ test('คำตอบยืนยัน: คำถาม/ประโยคย�
 test('wake: คำสะกดเพี้ยนที่เจอจริง (9 ต.ค. "พลายดีจ๊ะ") ต้องปลุก', () => {
   for (const t of ['พลายดีจ๊ะ', 'พลายเดย์', 'ฟลายเดย์ เปิดเพลง', 'ไพรเดย์']) assert.equal(matchWake(t).wake, true, t);
 });
+
+test('wakeDecision: คำปลุกล้วนต้องผ่านรอบสอง (ไม่มีคำใบ้) · มีคำสั่งต่อท้ายปลุกเลย', async () => {
+  const { wakeDecision } = await import('../lib/rules.mjs');
+  assert.equal(wakeDecision('ฟรายเดย์ เปิดเพลงหน่อย').wake, true);          // เสียงหลอนไม่มีคำต่อท้าย
+  assert.equal(wakeDecision('ฟรายเดย์').wake, null);                        // ต้องฟังรอบสอง
+  assert.equal(wakeDecision('ฟรายเดย์', 'ฟรายดิ').wake, true);              // เสียงคนจริง (วัด 9 ต.ค.)
+  assert.equal(wakeDecision('ฟรายเดย์', 'พลายดีจ๊ะ').wake, true);           // user จริง 9 ต.ค.
+  assert.equal(wakeDecision('ฟรายเดย์', 'กลับมากันเถอะ').wake, false);      // เสียงซ่า (วัด 9 ต.ค.)
+  assert.equal(wakeDecision('ฟรายเดย์', 'สว sunflower').wake, false);       // เสียงหึ่ง
+  assert.equal(wakeDecision('[เสียงดนตรี] ฟรายเดย์', '[เสียงดนตรี]').wake, false);
+  assert.equal(wakeDecision('ฟรายเดย์ ฟรายเดย์ ฟรายเดย์').wake, false);     // ซ้ำ 3 = หลอน
+  assert.equal(wakeDecision('วันนี้อากาศดี').wake, false);
+});

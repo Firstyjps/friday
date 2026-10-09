@@ -28,7 +28,7 @@ final class CascadeSession: LiveSession {
     // ---- VAD: ตัดช่วงพูด (PCM16 16k ทีละ 100ms) ----
     private var noiseFloor: Double
     private var seg: [Data] = [], preroll: [Data] = []
-    private var voiced = 0, silent = 0
+    private var voiced = 0, silent = 0, speechRun = 0
     private var firstSegment = true
     // ---- ข้อความสดระหว่างพูด: ส่งช่วงที่พูดไปแล้วให้ whisper ในเครื่องถอดทุก ~0.5 วิ ----
     private var segId = 0                          // ช่วงพูดปัจจุบัน (ทิ้งผลที่มาช้าของช่วงเก่า)
@@ -75,7 +75,8 @@ final class CascadeSession: LiveSession {
         }
         if seg.isEmpty { seg = preroll; preroll = []; segId += 1 }
         seg.append(pcm16k)
-        if isSpeech { voiced += 1; silent = 0 } else { silent += 1 }
+        // เสียงดังโดดๆ ก้อนเดียว (เพลง/เสียงห้อง) ไม่นับเป็นพูดต่อ — เดิมรีเซ็ตตัวนับความเงียบทุกครั้ง พูดจบแล้วรอตัดคลิปอีก ~5 วิ (9 ต.ค.)
+        if isSpeech { voiced += 1; speechRun += 1; if speechRun >= 2 { silent = 0 } else { silent += 1 } } else { speechRun = 0; silent += 1 }
         if voiced >= Self.minVoiced, !partialBusy, Date().timeIntervalSince(partialAt) > 0.5 { partial(seg.reduce(Data(), +)) }
         // ช่วงแรกหลังคำปลุก: คนมักเว้นจังหวะหลัง "ฟรายเดย์" → รอเงียบนานขึ้น (1.3 วิ) จะได้รวมเป็นประโยคเดียว
         // พูดยาว (>2.5 วิ) = กำลังอธิบาย มักหยุดคิดกลางประโยค → รอเงียบ 1.4 วิ (เดิม 0.7 วิ ตัดกลางประโยคแล้วที่พูดต่อหาย 9 ต.ค.)
@@ -116,7 +117,7 @@ final class CascadeSession: LiveSession {
         run(json: ["toolResponses": rs])
     }
 
-    private func resetVAD() { seg = []; voiced = 0; silent = 0 }
+    private func resetVAD() { seg = []; voiced = 0; silent = 0; speechRun = 0 }
 
     // ---------- หนึ่งรอบ ----------
     private func run(audio: Data) {

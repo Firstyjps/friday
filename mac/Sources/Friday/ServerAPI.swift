@@ -35,6 +35,8 @@ enum ServerAPI {
         var engine: String? = nil            // live | cascade (CascadeSession)
         var vpio: Bool? = nil                // ตัดเสียงสะท้อนด้วย VoiceProcessingIO (ปิดเป็นค่าเริ่ม)
         var bargeIn: Bool? = nil             // พูดแทรกด้วย EchoGate — ปิดไว้ตามที่ user เลือก (Friday พูด = ปิดไมค์) 9 ต.ค.
+        var wakeConfirmSec: Double? = nil    // ปลุกแล้วไม่มีเสียงพูดภายในเท่านี้ = ตื่นผิด กลับไปหลับเงียบๆ (ค่าเริ่ม 10)
+        var wakeCooldownSec: Double? = nil   // ตื่นผิด ≥2 ครั้งใน 3 นาที → ไม่รับคำปลุกจากเสียงช่วงนี้ (ค่าเริ่ม 60) — กดเรียก/คีย์ลัดยังได้
     }
 
     enum APIError: LocalizedError {

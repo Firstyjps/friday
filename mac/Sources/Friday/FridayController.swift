@@ -32,6 +32,7 @@ final class FridayController: ObservableObject {
     private var config: ServerAPI.Config?
     private var affirm: NSRegularExpression?
     private var negate: NSRegularExpression?
+    private static let question = try? NSRegularExpression(pattern: "(ไหม|มั้ย|มั๊ย|หรือเปล่า|รึเปล่า|เหรอ|\\?)\\s*$")
     private var farewell: NSRegularExpression?
     private var stopWords: NSRegularExpression?
     private var userTurn = ""                     // ประโยคล่าสุดของผู้ใช้ (ไว้จับคำลา)
@@ -86,6 +87,9 @@ final class FridayController: ObservableObject {
     private var wakeDetector = WakeDetector()
     private var checking = false
     private var postWake: [Data] = []             // เสียงที่พูดต่อระหว่างรอ whisper เช็คคำปลุก (เดิมหาย → ต้องพูดซ้ำ 8 ต.ค.)
+    private var wakeMsgId: UUID?                  // ข้อความ "👂 ได้ยิน" ของ session นี้ → ตื่นผิดแล้วลบตั้งแต่ตรงนี้ (ไม่ให้แชทรก)
+    private var falseWakes: [Date] = []           // ตื่นผิดใน 3 นาทีล่าสุด → ≥2 ครั้ง = วนตื่นจากเสียงห้อง (9 ต.ค. ทุก 25–50 วิ) พักรับคำปลุกจากเสียงสักครู่
+                                                  // (ครั้งเดียวไม่พัก: คนเรียกแล้วเงียบคิดเกิน 10 วิ ต้องเรียกใหม่ได้ทันที)
 
     // ---------- เริ่มต้น ----------
     private var activity: NSObjectProtocol?
@@ -179,6 +183,11 @@ final class FridayController: ObservableObject {
                     self.sys("⏱️ คุยครบเวลาต่อรอบ — พักก่อน เรียก \"Friday\" ใหม่ได้เลย"); self.endSession(); return
                 }
                 if let b = self.bargeAt, Date().timeIntervalSince(b) > 6 { self.bargeAt = nil; Log.write(self.audio.echo.penalize()) }
+                // ปลุกด้วยเสียงแล้วไม่มีใครพูดต่อ → ไม่มีคลิปให้ Scribe ยืนยัน (9 ต.ค. ค้างเปิดไมค์ 21 วิ 9 ครั้งใน 5 นาที) → ตื่นผิด
+                let confirmSec = self.config?.wakeConfirmSec ?? 10
+                if let cs = self.live as? CascadeSession, cs.awaitingWakeSpeech, let t0 = self.sessionStart, Date().timeIntervalSince(t0) > confirmSec {
+                    self.endFalseWake("ตื่นผิด — ไม่มีเสียงพูดใน \(Int(confirmSec)) วิหลังปลุก"); return
+                }
                 if self.voiceBusy || self.live?.inTurn == true || !self.confirms.isEmpty || !self.pendingResults.isEmpty || self.activeJobs > 0 {
                     self.lastActivity = Date(); return
                 }
@@ -260,7 +269,11 @@ final class FridayController: ObservableObject {
             defer { checking = false; postWake = [] }
             guard let r = try? await ServerAPI.wake(pcm: clip.reduce(Data(), +)) else { return }
             if r.wake && phase == .sleeping {
-                sys("👂 ได้ยิน: \(r.text)"); Log.write("wake: \(r.text)")
+                let cool = config?.wakeCooldownSec ?? 60
+                if falseWakes.count >= 2, let last = falseWakes.last, Date().timeIntervalSince(last) < cool {
+                    Log.write("wake: ข้าม — ตื่นผิดซ้ำ \(falseWakes.count) ครั้ง (พัก \(Int(cool)) วิ)"); return
+                }
+                wakeMsgId = sys("👂 ได้ยิน: \(r.text)"); Log.write("wake: \(r.text)")
                 wake(prebuffer: clip + postWake, greet: false)   // ส่งเสียงช่วงที่ปลุก + ที่พูดต่อระหว่างเช็ค ("Friday … เปิด Chrome")
             }
         }
@@ -435,12 +448,21 @@ final class FridayController: ObservableObject {
         live?.close(); live = nil
         ttsCancel()
         audio.flush()
-        meIndex = nil; friIndex = nil; connectQueue = []
+        meIndex = nil; friIndex = nil; connectQueue = []; wakeMsgId = nil
         if case .error = phase { return }
         setPhase(.sleeping)
         DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
             if self?.phase == .sleeping { self?.onWantsPanel?(false) }
         }
+    }
+
+    /// ตื่นผิด: ปิด session เงียบๆ — ไม่มีข้อความในแชท ลบสิ่งที่ขึ้นตั้งแต่ปลุก ซ่อน overlay ทันที แล้วพักรับคำปลุกจากเสียงสักครู่
+    private func endFalseWake(_ why: String) {
+        Log.write("session: \(why) → กลับไปหลับเงียบๆ")
+        falseWakes = falseWakes.filter { Date().timeIntervalSince($0) < 180 } + [Date()]
+        if let id = wakeMsgId, let i = messages.firstIndex(where: { $0.id == id }) { messages.removeSubrange(i...) }
+        endSession()
+        onWantsPanel?(false)
     }
 
     private func onLive(_ e: LiveSession.Event) {
@@ -532,6 +554,8 @@ final class FridayController: ObservableObject {
         case .goAway(let why):
             Log.write("session: goAway \(why)")
             resumeSession()
+        case .falseWake:
+            endFalseWake("ตื่นผิด — Scribe ไม่ได้ยินคำปลุก")
         case .closed(let why):
             Log.write("session: closed \(why)")
             if phase == .live || phase == .connecting {
@@ -641,7 +665,8 @@ final class FridayController: ObservableObject {
                 // ผู้ใช้ต้องพูดคำยืนยันเองจริง (เช็คจากเสียงผู้ใช้ ไม่เชื่อ Gemini อย่างเดียว)
                 // ต้องเป็นประโยคสั้นๆ ของผู้ใช้ "หลังจาก" Friday ถาม และมีคำยืนยันโดยไม่มีคำปฏิเสธ
                 let heard = c.heard.trimmingCharacters(in: .whitespaces)
-                let ok = c.armed && heard.count <= 40 && matches(affirm, heard) && !matches(negate, heard)
+                // ประโยคคำถาม ("ใช่ไหม", "ทำเลยได้ไหม") ไม่ใช่คำตอบ — ตรงกับ replyIntent ใน lib/rules.mjs
+                let ok = c.armed && heard.count <= 40 && matches(affirm, heard) && !matches(negate, heard) && !matches(Self.question, heard)
                 let remember = ok && heard.range(of: "ตลอด|จำไว้|ไม่ต้องถาม|ทุกครั้ง", options: .regularExpression) != nil   // "ยืนยันตลอด"
                 if approve && !ok {
                     resp = ["status": "not_confirmed", "result": c.armed ? "ยังไม่ได้ยินผู้ใช้พูดยืนยันสั้นๆ ชัดเจน (เช่น ใช่ / ยืนยัน) ให้ถามผู้ใช้อีกครั้ง" : "ยังไม่ได้ถามผู้ใช้ ให้ทวนงานแล้วถามว่ายืนยันไหมก่อน"]

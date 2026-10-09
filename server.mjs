@@ -6,7 +6,7 @@ import { readFile, appendFile, writeFile, mkdir, readdir, rename } from 'node:fs
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { extname, join } from 'node:path';
-import { RISKY, READ_ONLY_TOOLS, HARD_DENY, SECRET_DENY, agentEnv, CONFIRM_MARK, WAKE, frameResult } from './lib/rules.mjs';
+import { RISKY, READ_ONLY_TOOLS, HARD_DENY, SECRET_DENY, agentEnv, CONFIRM_MARK, WAKE, isWakeEcho, replyIntent, frameResult } from './lib/rules.mjs';
 import { AgentSession } from './lib/claude-agent.mjs';
 import { decide as policyDecide, secretCheck, ruleKey, RuleStore } from './lib/policy.mjs';
 import { speak as homepodSpeak, askText } from './lib/homepod.mjs';
@@ -260,13 +260,14 @@ async function detectWake(pcm) {
   const form = new FormData();
   form.append('file', new Blob([pcmToWav(pcm)], { type: 'audio/wav' }), 'clip.wav');
   form.append('response_format', 'json');
-  form.append('prompt', 'Friday ฟรายเดย์');   // คำใบ้ → ถอดคำปลุกถูกขึ้นตอนมีเสียงรบกวน (ทดสอบ 8 ต.ค.: ไม่ทำให้ปลุกมั่วกับเงียบ/ดนตรี/เสียงพูดอื่น)
+  // ไม่ใส่ prompt คำปลุกแล้ว: 8 ต.ค. ใส่ 'Friday ฟรายเดย์' → whisper ทวนคำใบ้ออกมาเองจากเสียงวางของ/เสียงห้อง (9 ต.ค. 26/27 ครั้งที่ตื่นเป็นคำปลุกซ้ำล้วน)
   const t0 = Date.now();
   const r = await fetch(WHISPER, { method: 'POST', body: form, signal: AbortSignal.timeout(8000) });
   const text = ((await r.json()).text || '').trim();
   whisperMs = whisperMs == null ? Date.now() - t0 : Math.round(whisperMs * 0.8 + (Date.now() - t0) * 0.2);
-  const m = text.replace(/\[[^\]]*\]|\([^)]*\)/g, ' ').trim().match(WAKE);   // ตัด [เสียงดนตรี] ที่ whisper ใส่หน้าคำปลุกตอนมีเพลง
-  return { text, wake: !!m, phrase: m ? m[0].trim() : '' };
+  const bare = text.replace(/\[[^\]]*\]|\([^)]*\)/g, ' ').trim();   // ตัด [เสียงดนตรี] ที่ whisper ใส่หน้าคำปลุกตอนมีเพลง
+  const m = isWakeEcho(bare) ? null : bare.match(WAKE);
+  return { text, wake: !!m, phrase: m ? m[0].trim() : '', echo: !m && isWakeEcho(bare) };
 }
 
 // ข้อความสดระหว่างผู้ใช้พูด (แอป Mac โหมด cascade) — whisper ในเครื่อง ~0.4 วิ/ประโยค ไว้โชว์บน overlay อย่างเดียว
@@ -518,7 +519,13 @@ const serverTools = {
 };
 
 // ---------- HomePod: (C) พูดออกลำโพง · (B) "หวัดดี Siri เลขาส่วนตัว" ----------
-const loadCfg = async () => JSON.parse(await readText(join(PUBLIC, 'config.json')) || '{}');
+// config.json เสีย/อ่านไม่ได้ → ใช้ค่าล่าสุดที่อ่านได้ (เดิม JSON.parse throw ใน .then ที่ไม่มี catch → server ดับวนตอนบูต)
+let lastCfg = {};
+const loadCfg = async () => {
+  const t = await readText(join(PUBLIC, 'config.json'));
+  if (!t) { log('config: อ่าน config.json ไม่ได้ → ใช้ค่าล่าสุด'); return lastCfg; }
+  try { return (lastCfg = JSON.parse(t)); } catch (e) { log(`config: config.json เสีย (${e.message}) → ใช้ค่าล่าสุด`); return lastCfg; }
+};
 const announce = async (text) => { const cfg = await loadCfg(); return homepodSpeak(text, cfg.homepod, log, cfg); };
 serverTools.announce_homepod = async ({ text }) => announce(text);
 
@@ -551,8 +558,8 @@ async function homepodAsk(text) {
   chatLog('🧑🔊', text);
   const pending = homepodPending && jobs.get(homepodPending);
   if (pending?.status === 'needs_confirmation') {          // คำตอบยืนยัน/ยกเลิกงานที่ถามค้างไว้
-    const yes = new RegExp(cfg.affirm, 'i').test(text), no = new RegExp(cfg.negate, 'i').test(text);
-    if (yes !== no) {
+    const intent = replyIntent(text, cfg), yes = intent === 'yes';   // ปฏิเสธชนะ · คำถาม/ประโยคยาว = เรื่องอื่น
+    if (intent) {
       homepodPending = null;
       log(`HOMEPOD ${yes ? 'ยืนยัน' : 'ยกเลิก'} JOB ${pending.id}`);
       await confirmJob(pending, yes);
@@ -603,8 +610,11 @@ const turnTails = new Map();          // session → promise (ทีละรอ
 
 // ---------- หน้าต่างหลัก Friday.app (/api/app/*) ----------
 const CFG_FILE = join(PUBLIC, 'config.json');
+// แก้ config ทีละคำขอ (อ่าน → แก้ → เขียน) — สลับสวิตช์รัวๆ ในหน้าต่าง Friday เคยทำค่าหาย/ไฟล์พัง
+let cfgSeq = 0, cfgLock = Promise.resolve();
+const withCfgLock = (fn) => { const p = cfgLock.then(fn, fn); cfgLock = p.catch(() => {}); return p; };
 async function saveCfg(cfg) {                  // เขียนแบบ atomic — server/แอปอ่าน config.json ทุกครั้ง
-  const tmp = CFG_FILE + '.tmp';
+  const tmp = `${CFG_FILE}.${process.pid}.${++cfgSeq}.tmp`;   // ชื่อไม่ซ้ำ: สองคำขอพร้อมกันเคย rename ชนกัน (ENOENT)
   await writeFile(tmp, JSON.stringify(cfg, null, 2) + '\n');
   await rename(tmp, CFG_FILE);
 }
@@ -653,9 +663,13 @@ async function appApi(req, res, url) {
     });
   }
   if (req.method === 'POST' && p === 'settings') {
-    const cfg = await loadCfg();
-    if (!applySettings(cfg, await readBody(req))) return json(res, 400, { error: 'bad setting' });
-    await saveCfg(cfg);
+    const body = await readBody(req);
+    const ok = await withCfgLock(async () => {
+      const cfg = JSON.parse(await readFile(CFG_FILE, 'utf8'));   // อ่านจากไฟล์จริงเท่านั้น (อ่านไม่ได้ = throw → 500 ไม่เขียนทับด้วยค่าว่าง)
+      if (!applySettings(cfg, body)) return false;
+      await saveCfg(cfg); return true;
+    });
+    if (!ok) return json(res, 400, { error: 'bad setting' });
     log('config: แก้จากหน้าต่าง Friday');
     return json(res, 200, { ok: true });
   }
@@ -685,6 +699,8 @@ async function appApi(req, res, url) {
 }
 
 // ---------- HTTP ----------
+// promise ที่ไม่มีใคร catch (งานเบื้องหลัง/handler) → log ไว้ ไม่ให้ทั้ง server ดับ (Node ค่าเริ่มต้น = ปิด process)
+process.on('unhandledRejection', (e) => log(`unhandledRejection: ${String(e?.stack ?? e).split('\n').slice(0, 3).join(' | ')}`));
 const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
 const readBody = (req) => new Promise((resolve, reject) => {
   let b = ''; req.on('data', (d) => { b += d; if (b.length > 1e5) req.destroy(); });
@@ -730,7 +746,7 @@ http.createServer(async (req, res) => {
       }
       if (req.method === 'POST' && url.pathname === '/api/wake') {
         const r = await detectWake(await readRaw(req));
-        if (r.wake) log(`WAKE | ${r.phrase}`); else log(`wake check: no (${r.text.length} chars)`);   // ไม่ log ข้อความ (privacy)
+        if (r.wake) log(`WAKE | ${r.phrase}`); else log(`wake check: no (${r.text.length} chars${r.echo ? ', คำปลุกซ้ำล้วน' : ''})`);   // ไม่ log ข้อความ (privacy)
         // โหมดหาสาเหตุชั่วคราว (user อนุญาต): ไฟล์ data/wake-debug-until มี timestamp → เก็บแค่ 12 ตัวอักษรแรก แยกไฟล์ ลบหลังวิเคราะห์
         const until = +(await readText(join(DATA, 'wake-debug-until'))) || 0;
         if (Date.now() < until) appendFile(join(HOME, 'logs', 'friday-wake-debug.log'), `${new Date().toISOString().slice(11, 19)} | ${r.wake ? 'WAKE' : 'no  '} | ${r.text.slice(0, 12)}\n`).catch(() => {});
@@ -808,7 +824,7 @@ http.createServer(async (req, res) => {
         const job = jobs.get(m[1]);
         return job ? json(res, 200, view(job)) : json(res, 404, { error: 'no such job' });
       }
-      if (url.pathname.startsWith('/api/app/')) return appApi(req, res, url);
+      if (url.pathname.startsWith('/api/app/')) return await appApi(req, res, url);   // await: error ใน handler ต้องเข้า catch ด้านล่าง (เดิมหลุดเป็น unhandledRejection → server ดับ)
       return json(res, 404, { error: 'not found' });
     }
     if (url.pathname === '/config.json') return json(res, 200, effectiveConfig(await loadCfg()));   // ตัดเครื่องมือที่ผู้ใช้ปิดไว้

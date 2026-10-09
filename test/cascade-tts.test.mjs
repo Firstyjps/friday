@@ -1,0 +1,88 @@
+import { test, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
+import { Cascade } from '../lib/cascade.mjs';
+
+// ทดสอบทางสำรองของ TTS โดยไม่เรียก API จริง: แทน fetch/WebSocket ด้วยตัวปลอม
+const realFetch = globalThis.fetch, realWS = globalThis.WebSocket;
+afterEach(() => { globalThis.fetch = realFetch; globalThis.WebSocket = realWS; });
+
+const MODELS = ['m-a', 'm-b'];
+const cfg = (extra = {}) => ({ cascade: { ttsModels: MODELS, ...extra } });
+const make = () => { const logs = []; return { c: new Cascade({ key: 'test', log: (l) => logs.push(l) }), logs }; };
+const audioSSE = () => new Response(`data: ${JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { data: Buffer.from('pcm').toString('base64') } }] } }] })}\n\n`);
+const modelOf = (url) => String(url).match(/models\/([^:]+):/)[1];
+const hang = (signal) => new Promise((_, rej) => signal.addEventListener('abort', () => rej(signal.reason)));
+
+test('tts: รุ่นแรก fetch พัง (เน็ต/timeout) → ไปรุ่นถัดไป ไม่ทิ้งประโยค', async () => {
+  globalThis.fetch = async (url) => { if (modelOf(url) === 'm-a') throw new Error('fetch failed'); return audioSSE(); };
+  const { c } = make(), got = [];
+  assert.equal(await c.tts('สวัสดี', cfg(), (b) => got.push(b)), 'm-b');
+  assert.equal(got.length, 1);
+});
+
+test('tts: ไม่ได้ byte แรกตามเวลา → ยกเลิกแล้วไปรุ่นถัดไป', async () => {
+  globalThis.fetch = async (url, o) => (modelOf(url) === 'm-a' ? hang(o.signal) : audioSSE());
+  const { c } = make();
+  assert.equal(await c.tts('สวัสดี', cfg({ ttsFirstByteMs: 50 }), () => {}), 'm-b');
+});
+
+test('tts: 429 โควตารายวันพักไม่เกิน 1 ชม. แม้ Google บอกให้รอ 20 ชม.', async () => {
+  globalThis.fetch = async (url) => (modelOf(url) === 'm-a'
+    ? new Response('Quota exceeded for metric generate_requests_per_model_per_day. Please retry in 20h0m0s.', { status: 429 })
+    : audioSSE());
+  const { c } = make();
+  const t0 = Date.now();
+  assert.equal(await c.tts('สวัสดี', cfg(), () => {}), 'm-b');
+  const until = c.ttsBlocked.get('m-a');
+  assert.ok(until > t0 && until <= Date.now() + 60 * 60e3, `พักนานเกิน: ${(until - t0) / 60000} นาที`);
+});
+
+test('tts: ทุกรุ่นพัง → Live ไม่ได้เสียงเลย ต้อง reject (ไม่ใช่เงียบแล้วนับว่าสำเร็จ)', async () => {
+  globalThis.fetch = async () => { throw new Error('down'); };
+  globalThis.WebSocket = class {
+    constructor() { setTimeout(() => this.onopen?.(), 0); }
+    send(m) {
+      const o = JSON.parse(m);
+      setTimeout(() => this.onmessage?.({ data: JSON.stringify(o.setup ? { setupComplete: {} } : { serverContent: { turnComplete: true } }) }), 0);
+    }
+    close() {}
+  };
+  const { c } = make();
+  await assert.rejects(c.tts('สวัสดี', cfg(), () => {}), /ไม่ได้เสียง/);
+});
+
+test('filler: ทำเสียงไม่ได้ → ไม่จำผลว่างไว้ (ครั้งหน้าลองใหม่)', async () => {
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; throw new Error('down'); };
+  globalThis.WebSocket = undefined;
+  const { c } = make(), config = cfg({ liveFallback: false });
+  await assert.rejects(c.filler(config, 'ได้ค่ะ'));
+  await assert.rejects(c.filler(config, 'ได้ค่ะ'));
+  assert.equal(calls, 4);            // 2 รุ่น × 2 ครั้ง — ครั้งที่สองไม่ได้ใช้ผลค้าง
+});
+
+// ---------- คลิปแรกหลังคำปลุก (input.wake) ----------
+const geminiOrTts = async (url) => (/flash-lite:stream/.test(String(url))
+  ? new Response(`data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: 'ได้ค่ะ' }] } }], usageMetadata: {} })}\n\n`)
+  : audioSSE());
+const wakeTurn = async (heard) => {
+  globalThis.fetch = geminiOrTts;
+  const c = new Cascade({ key: 'test', log: () => {}, wav16k: (p) => p, scribe: async () => heard });
+  c.open('s1', { system: '', cfg: { cascade: { filler: false, googleSearch: false, ttsModels: ['m-a'] }, tools: [] } });
+  const ev = [];
+  await c.turn('s1', { audio: Buffer.alloc(32000), wake: true }, (o) => ev.push(o));
+  return ev;
+};
+
+test('ตื่นผิด: Scribe ไม่ได้ยินคำปลุก → ส่งแค่ done{falseWake} ไม่มีข้อความผู้ใช้/คำตอบหลุดไปแอป', async () => {
+  for (const heard of ['', 'อืม โอเคนะ']) {      // ถอดได้ว่าง หรือได้ประโยคอื่นที่ไม่มีคำปลุก (เดิมบับเบิลนี้หลุดไปค้างในแอป)
+    assert.deepEqual(await wakeTurn(heard), [{ t: 'done', pending: 0, falseWake: true }], `heard="${heard}"`);
+  }
+});
+
+test('ปลุกจริง: ข้อความผู้ใช้ออกก่อนคำตอบ แล้วตามด้วยเสียงและ done', async () => {
+  const ev = await wakeTurn('ฟรายเดย์ วันนี้วันอะไร');
+  assert.equal(ev[0].t, 'user');
+  assert.ok(ev.some((o) => o.t === 'text') && ev.some((o) => o.t === 'audio'));
+  assert.deepEqual(ev.at(-1), { t: 'done', pending: 0 });
+});

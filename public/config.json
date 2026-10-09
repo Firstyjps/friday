@@ -7,7 +7,7 @@
   "vaultExclude": "secret|password|credential|wallet|private-key",
   "_vaultNote": "vault_lookup ข้ามไฟล์ที่ชื่อเข้าข่าย vaultExclude และไฟล์ที่มี friday: false ใน frontmatter (เนื้อหาถูกส่งไป Google)",
   "affirm": "(ใช่|ยืนยัน|ตกลง|โอเค|เอาเลย|ได้เลย|ทำเลย|จัดไป|\\b(yes|yeah|ok|okay|confirm|sure|go ahead)\\b)",
-  "negate": "(ไม่|อย่า|ยกเลิก|หยุด|รอก่อน|\\b(no|nope|cancel|stop|wait)\\b)",
+  "negate": "(ไม่|อย่า(?!ง)|ห้าม|เลิก|หยุด|รอก่อน|\\b(no|nope|cancel|stop|wait|don'?t|do not)\\b)",
   "tools": [
     {
       "functionDeclarations": [

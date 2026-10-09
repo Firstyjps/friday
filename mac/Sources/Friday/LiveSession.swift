@@ -14,6 +14,7 @@ class LiveSession: NSObject, URLSessionWebSocketDelegate {
         case toolCancelled([String])      // ผู้ใช้พูดแทรกระหว่าง tool call → Gemini ยกเลิก
         case goAway(String)               // Gemini เตือนว่าจะปิดการเชื่อมต่อ (timeLeft)
         case closed(String)
+        case falseWake                    // cascade: Scribe ไม่ได้ยินคำปลุกในคลิปแรก → กลับไปหลับเงียบๆ
     }
 
     var onEvent: ((Event) -> Void)?

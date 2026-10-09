@@ -29,6 +29,10 @@ final class CascadeSession: LiveSession {
     private var partialBusy = false
     private var partialAt = Date.distantPast
     private static let minSpeech = 400.0, prerollChunks = 3, endSilence = 7, maxChunks = 300, minVoiced = 3
+    /// คลิปแรกหลังคำปลุก: ตัดที่ 8 วิ (เสียงรบกวนต่อเนื่องเคยลากยาว 30 วิก่อน Scribe จะได้ตัดสินว่าตื่นผิด · คำสั่งจริงยาวสุดที่วัดได้ 8.6 วิ)
+    private static let wakeMaxChunks = 80
+    /// ปลุกแล้วยังไม่มีเสียงพูดเลย (ยังไม่ได้ส่งคลิปให้ Scribe ยืนยัน) — controller ใช้ตัดสินว่าตื่นผิด
+    var awaitingWakeSpeech: Bool { wakeCheck && seg.isEmpty && !busy && !closed }
 
     /// noise = ระดับเสียงพื้นหลังที่หูคำปลุกเรียนรู้มาแล้ว (เริ่ม 300 แบบเดิม → เกณฑ์ 900 สูงไป ประโยคต่อจากคำปลุกหาย 8 ต.ค.)
     init(noise: Double) { noiseFloor = min(max(noise, 50), 300); super.init() }
@@ -68,7 +72,7 @@ final class CascadeSession: LiveSession {
         // ช่วงแรกหลังคำปลุก: คนมักเว้นจังหวะหลัง "ฟรายเดย์" → รอเงียบนานขึ้น (1.3 วิ) จะได้รวมเป็นประโยคเดียว
         // พูดยาว (>2.5 วิ) = กำลังอธิบาย มักหยุดคิดกลางประโยค → รอเงียบ 1.4 วิ (เดิม 0.7 วิ ตัดกลางประโยคแล้วที่พูดต่อหาย 9 ต.ค.)
         let endSilence = firstSegment && voiced < 15 ? 13 : voiced >= 25 ? 14 : Self.endSilence
-        guard silent >= endSilence || seg.count >= Self.maxChunks else { return }
+        guard silent >= endSilence || seg.count >= (wakeCheck ? Self.wakeMaxChunks : Self.maxChunks) else { return }
         firstSegment = false
         let clip = seg.reduce(Data(), +), enough = voiced >= Self.minVoiced
         resetVAD()
@@ -156,7 +160,7 @@ final class CascadeSession: LiveSession {
                         self.onEvent?(.toolCall(id: o["id"] as? String ?? "", name: o["name"] as? String ?? "", args: o["args"] as? [String: Any] ?? [:]))
                     case "done":
                         pending = o["pending"] as? Int ?? 0
-                        if o["falseWake"] as? Bool == true { self.onEvent?(.closed("ตื่นผิด — ไม่ได้ยินคำปลุกจริง")); return }
+                        if o["falseWake"] as? Bool == true { self.onEvent?(.falseWake); return }
                     case "error": Log.write("cascade: server error \(o["error"] ?? "")")
                     default: break
                     }

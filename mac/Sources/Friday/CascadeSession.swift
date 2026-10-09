@@ -17,7 +17,13 @@ final class CascadeSession: LiveSession {
     private var gen = 0
     private var extra = ""                         // system เพิ่มเติม (ความจำ/บทสนทนาล่าสุด) ไว้เปิด session ใหม่ตอน server รีสตาร์ท
     /// ตื่นด้วยคำปลุก → คลิปแรกให้ server ยืนยันด้วย Scribe ว่ามีคำปลุกจริง (ไม่มี = ตื่นผิด ปิดเงียบๆ)
-    var wakeCheck = false                            // รอบที่ถูกพูดแทรกแล้ว → event ที่ค้างมาทีหลังทิ้ง
+    /// 1 = ต้องมีคำปลุก · 2 = ได้ยินแค่คำปลุกแล้ว (Scribe ถอดคำเดียวได้ว่าง) คลิปถัดไปต้องมีคำพูดจริง
+    private var wakeMode = 0
+    private(set) var wakeSince = Date()               // เริ่มรอเสียงพูดเมื่อไร (แอปให้เวลา wakeConfirmSec)
+    var wakeCheck: Bool {
+        get { wakeMode != 0 }
+        set { wakeMode = newValue ? 1 : 0; wakeSince = Date() }
+    }                            // รอบที่ถูกพูดแทรกแล้ว → event ที่ค้างมาทีหลังทิ้ง
 
     // ---- VAD: ตัดช่วงพูด (PCM16 16k ทีละ 100ms) ----
     private var noiseFloor: Double
@@ -115,7 +121,7 @@ final class CascadeSession: LiveSession {
     // ---------- หนึ่งรอบ ----------
     private func run(audio: Data) {
         Log.write("cascade: ส่งเสียง \(String(format: "%.1f", Double(audio.count) / 32000))s")
-        let wake = wakeCheck; wakeCheck = false
+        let wake = wakeMode; wakeMode = 0
         start(seg: segId) { try await ServerAPI.turn(session: self.id, audio: audio, wake: wake) }
     }
 
@@ -167,6 +173,7 @@ final class CascadeSession: LiveSession {
                     case "done":
                         pending = o["pending"] as? Int ?? 0
                         if o["falseWake"] as? Bool == true { self.onEvent?(.falseWake); return }
+                        if o["wakeRetry"] as? Bool == true { self.wakeMode = 2; self.wakeSince = Date(); Log.write("cascade: ได้ยินแค่คำปลุก → รอฟังคำสั่งต่อ") }
                     case "error": Log.write("cascade: server error \(o["error"] ?? "")"); failed = o["error"] as? String ?? "server error"
                     default: break
                     }

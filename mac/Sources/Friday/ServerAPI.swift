@@ -151,8 +151,8 @@ enum ServerAPI {
         _ = try? await request("/api/cascade/close", method: "POST", json: ["session": session])
     }
     /// หนึ่งรอบคุย → NDJSON stream (อ่านทีละบรรทัดด้วย .lines)
-    static func turn(session: String, audio: Data, wake: Bool = false) async throws -> URLSession.AsyncBytes {
-        try await stream("/api/turn?session=\(session)\(wake ? "&wake=1" : "")", body: audio, type: "application/octet-stream")
+    static func turn(session: String, audio: Data, wake: Int = 0) async throws -> URLSession.AsyncBytes {
+        try await stream("/api/turn?session=\(session)\(wake > 0 ? "&wake=\(wake)" : "")", body: audio, type: "application/octet-stream")
     }
     static func turn(session: String, json: [String: Any]) async throws -> URLSession.AsyncBytes {
         try await stream("/api/turn?session=\(session)", body: try JSONSerialization.data(withJSONObject: json), type: "application/json")

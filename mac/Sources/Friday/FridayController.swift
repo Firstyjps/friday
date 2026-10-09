@@ -196,7 +196,7 @@ final class FridayController: ObservableObject {
                 if let b = self.bargeAt, Date().timeIntervalSince(b) > 6 { self.bargeAt = nil; Log.write(self.audio.echo.penalize()) }
                 // ปลุกด้วยเสียงแล้วไม่มีใครพูดต่อ → ไม่มีคลิปให้ Scribe ยืนยัน (9 ต.ค. ค้างเปิดไมค์ 21 วิ 9 ครั้งใน 5 นาที) → ตื่นผิด
                 let confirmSec = self.config?.wakeConfirmSec ?? 10
-                if let cs = self.live as? CascadeSession, cs.awaitingWakeSpeech, let t0 = self.sessionStart, Date().timeIntervalSince(t0) > confirmSec {
+                if let cs = self.live as? CascadeSession, cs.awaitingWakeSpeech, Date().timeIntervalSince(cs.wakeSince) > confirmSec {
                     self.endFalseWake("ตื่นผิด — ไม่มีเสียงพูดใน \(Int(confirmSec)) วิหลังปลุก"); return
                 }
                 if self.voiceBusy || self.live?.inTurn == true || !self.confirms.isEmpty || !self.pendingResults.isEmpty || self.activeJobs > 0 {

@@ -65,19 +65,26 @@ test('filler: ทำเสียงไม่ได้ → ไม่จำผล�
 const geminiOrTts = async (url) => (/flash-lite:stream/.test(String(url))
   ? new Response(`data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: 'ได้ค่ะ' }] } }], usageMetadata: {} })}\n\n`)
   : audioSSE());
-const wakeTurn = async (heard) => {
+const wakeTurn = async (heard, wake = 'word') => {
   globalThis.fetch = geminiOrTts;
   const c = new Cascade({ key: 'test', log: () => {}, wav16k: (p) => p, scribe: async () => { if (heard instanceof Error) throw heard; return heard; } });
   c.open('s1', { system: '', cfg: { cascade: { filler: false, googleSearch: false, ttsModels: ['m-a'] }, tools: [] } });
   const ev = [];
-  await c.turn('s1', { audio: Buffer.alloc(32000), wake: true }, (o) => ev.push(o));
+  await c.turn('s1', { audio: Buffer.alloc(32000), wake }, (o) => ev.push(o));
   return ev;
 };
 
 test('ตื่นผิด: Scribe ไม่ได้ยินคำปลุก → ส่งแค่ done{falseWake} ไม่มีข้อความผู้ใช้/คำตอบหลุดไปแอป', async () => {
-  for (const heard of ['', 'อืม โอเคนะ']) {      // ถอดได้ว่าง หรือได้ประโยคอื่นที่ไม่มีคำปลุก (เดิมบับเบิลนี้หลุดไปค้างในแอป)
-    assert.deepEqual(await wakeTurn(heard), [{ t: 'done', pending: 0, falseWake: true }], `heard="${heard}"`);
-  }
+  // ได้ประโยคอื่นที่ไม่มีคำปลุก (เดิมบับเบิลนี้หลุดไปค้างในแอป)
+  assert.deepEqual(await wakeTurn('อืม โอเคนะ'), [{ t: 'done', pending: 0, falseWake: true }]);
+  // คลิปถัดจากที่ได้ยินแค่คำปลุก แล้วยังไม่มีคำพูด = ตื่นผิด
+  assert.deepEqual(await wakeTurn('', 'speech'), [{ t: 'done', pending: 0, falseWake: true }]);
+});
+
+test('ได้ยินแค่คำปลุก (Scribe ถอด "Friday" คำเดียวได้ว่าง) → ไม่ตอบ แต่ไม่ปิด รอคำสั่งต่อ', async () => {
+  assert.deepEqual(await wakeTurn(''), [{ t: 'done', pending: 0, wakeRetry: true }]);
+  const ev = await wakeTurn('เปิด Chrome ให้หน่อย', 'speech');     // คำสั่งที่พูดตามมา (ไม่มีคำปลุก) ต้องตอบ
+  assert.equal(ev[0].t, 'user'); assert.ok(ev.some((o) => o.t === 'text'));
 });
 
 test('ปลุกจริง: ข้อความผู้ใช้ออกก่อนคำตอบ แล้วตามด้วยเสียงและ done', async () => {

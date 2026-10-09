@@ -6,13 +6,13 @@ import { isWakeEcho, matchWake, replyIntent } from '../lib/rules.mjs';
 const cfg = JSON.parse(readFileSync(new URL('../public/config.json', import.meta.url), 'utf8'));
 
 test('wake echo: คำปลุกซ้ำล้วน = whisper หลอน ไม่ปลุก (9 ต.ค.)', () => {
-  for (const t of ['ฟรายเดย์ ฟรายเดย์', 'ฟรายเดย์ ฟรายเดย์ ฟรายเดย์', 'Friday, Friday.', 'ฟรายเดย์ Friday', ' ฟรายเดย์  ฟรายเดย์ … ']) {
+  for (const t of ['ฟรายเดย์ ฟรายเดย์ ฟรายเดย์', 'Friday, Friday, Friday.', 'ฟรายเดย์ Friday ฟรายเดย์', ' ฟรายเดย์  ฟรายเดย์ ฟรายเดย์… ']) {
     assert.equal(isWakeEcho(t), true, `ควรเป็นเสียงหลอน: ${t}`);
   }
 });
 
 test('wake echo: เรียกจริงต้องยังปลุกได้', () => {
-  for (const t of ['ฟรายเดย์', 'Friday', 'Friday เปิด Chrome', 'ฟรายเดย์ ช่วยเช็คราคาทองหน่อย', 'เฮ้ย ไฟร์เดย์']) {
+  for (const t of ['ฟรายเดย์', 'Friday', 'Friday เปิด Chrome', 'ฟรายเดย์ ช่วยเช็คราคาทองหน่อย', 'เฮ้ย ไฟร์เดย์', 'ฟรายเดย์ ฟรายเดย์', 'Friday, Friday']) {
     assert.equal(isWakeEcho(t), false, `ไม่ใช่เสียงหลอน: ${t}`);
     assert.equal(matchWake(t).wake, true, `ควรปลุก: ${t}`);
   }

@@ -31,10 +31,20 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     func show(_ page: MainUI.Page? = nil) {
         if let page { ui.page = page }
         NSApp.setActivationPolicy(.regular)                     // ระหว่างเปิดหน้าต่าง: มีไอคอนใน Dock + ⌘Tab ได้
-        if let icon = Fox.appIconImage() { NSApp.applicationIconImage = icon }
+        // ไอคอน Dock: แอปเมนูบาร์ (LSUIElement) ที่เพิ่งเปลี่ยนเป็น .regular สร้างช่อง Dock ทีหลัง → ตั้งซ้ำหลังช่องขึ้น ไม่งั้นได้ไอคอน "exec"
+        for delay in [0.0, 0.3, 1.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { Self.setDockIcon() }
+        }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         ui.appear()
+    }
+
+    private static let dockIcon = Fox.appIconImage(px: 1024)
+    static func setDockIcon() {
+        guard let icon = dockIcon else { return }
+        NSApp.applicationIconImage = icon
+        NSApp.dockTile.display()
     }
 
     func windowWillClose(_ n: Notification) {

@@ -63,7 +63,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotKey = HotKey(keyCode: 3 /* F */, modifiers: [.command, .option]) { [weak self] in self?.summon() }
     }
 
-    @objc func handleURL(_ event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) { summon() }
+    /// friday://open = เปิดหน้าต่างหลัก · friday:// อื่นๆ = เรียกคุย
+    @objc func handleURL(_ event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
+        let url = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue.flatMap(URL.init(string:))
+        if url?.host == "open" { openMain() } else { summon() }
+    }
 
     /// ปิด Friday (เมนู / ⌘Q) → ปล่อยไมค์ + ปิดหูสำรองของ server ด้วย ไมค์จะไม่ถูกใช้เลยจนกว่าจะเปิดแอปใหม่
     func applicationWillTerminate(_ n: Notification) { controller.shutdown() }

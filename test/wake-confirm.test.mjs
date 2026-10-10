@@ -52,4 +52,6 @@ test('wakeDecision: คำปลุกล้วนต้องผ่านรอ
   assert.equal(wakeDecision('[เสียงดนตรี] ฟรายเดย์', '[เสียงดนตรี]').wake, false);
   assert.equal(wakeDecision('ฟรายเดย์ ฟรายเดย์ ฟรายเดย์').wake, false);     // ซ้ำ 3 = หลอน
   assert.equal(wakeDecision('วันนี้อากาศดี').wake, false);
+  assert.equal(wakeDecision('สวัสดี ฟรายเด').wake, null);                     // คำทักนำหน้า = ยังล้วน ต้องฟังรอบสอง (10 ต.ค.)
+  assert.equal(wakeDecision('เฮ้ ฟรายเดย์ เปิดเพลง').wake, true);
 });

@@ -126,6 +126,10 @@ enum ServerAPI {
     }
 
     /// ความจำ + บทสนทนาล่าสุด → ต่อท้าย system prompt ตอนเริ่มคุย
+    static func location(lat: Double, lon: Double, acc: Double, place: String, wifi: String) async {
+        _ = try? await request("/api/location", method: "POST", json: ["lat": lat, "lon": lon, "acc": acc, "place": place, "wifi": wifi], timeout: 10)
+    }
+
     static func contextText() async -> String {
         guard let data = try? await request("/api/context"),
               let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return "" }
@@ -133,6 +137,14 @@ enum ServerAPI {
         if let m = o["memory"] as? String, !m.isEmpty { out += "\n\nความจำ (สิ่งที่เคยจดไว้):\n\(m)" }
         if let r = o["recent"] as? String, !r.isEmpty { out += "\n\nบทสนทนาล่าสุด (3 วัน):\n\(r)" }
         if let sc = o["shortcuts"] as? String, !sc.isEmpty { out += "\n\nShortcuts ที่สั่งได้: \(sc)" }
+        // รู้จักผู้ใช้: โปรไฟล์ (data/profile.md) + อยู่ไหน + กำลังทำอะไร — 10 ต.ค. Friday เดาที่อยู่ผู้ใช้เอง
+        if let p = o["profile"] as? String, !p.isEmpty { out += "\n\nเกี่ยวกับผู้ใช้:\n\(p)" }
+        let loc = o["location"] as? String ?? ""
+        out += "\n\n[ตำแหน่งตอนนี้] \(loc.isEmpty ? "ยังไม่รู้ — ถ้าต้องใช้ ให้ถามผู้ใช้ ห้ามเดา" : loc)"
+        if let f = o["front"] as? String, !f.isEmpty {
+            let apps = o["apps"] as? String ?? ""
+            out += "\n[ผู้ใช้กำลังใช้] \(f) อยู่ตรงหน้า\(apps.isEmpty ? "" : " · เปิดอยู่ด้วย: \(apps)")"
+        }
         return out
     }
 

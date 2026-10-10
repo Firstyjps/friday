@@ -414,6 +414,8 @@ const readRaw = (req, max = 32000 * 10) => new Promise((resolve, reject) => {
 // ---------- ความจำ / Vault / ค่าใช้จ่าย (tools ฝั่ง server) ----------
 const DATA = join(import.meta.dirname, 'data');
 const MEMORY = join(DATA, 'memory.md');           // สิ่งที่ Friday จดไว้ (tool remember)
+const PROFILE = join(DATA, 'profile.md');         // เกี่ยวกับผู้ใช้ (ผู้ใช้แก้เองได้) — ส่งให้ Friday ทุกครั้งที่เริ่มคุย
+const LOCATION = join(DATA, 'location.json');     // ตำแหน่งล่าสุดจากแอป Mac (CoreLocation) — 10 ต.ค. Friday เดาเองว่าผู้ใช้อยู่ดำเนินสะดวก
 const USAGE = join(DATA, 'usage.jsonl');          // ค่าใช้จ่ายแต่ละ session
 const CHAT = join(HOME, 'logs', 'friday-chat.log');
 const VAULT = join(HOME, 'Vault', '10-projects');
@@ -421,14 +423,36 @@ const readText = (f) => readFile(f, 'utf8').catch(() => '');
 const today = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Bangkok' });
 
 /// ส่งให้ Friday ตอนเริ่มคุย: ความจำ + บทสนทนาล่าสุด 3 วัน
+// ---------- ผู้ใช้อยู่ไหน / ทำอะไรอยู่ ----------
+let lastLocation = null;
+readText(LOCATION).then((t) => { try { lastLocation = JSON.parse(t); } catch {} });
+const hhmm = (ms) => new Date(ms).toLocaleTimeString('th-TH', { timeZone: 'Asia/Bangkok', hour: '2-digit', minute: '2-digit' });
+function locationText() {
+  const l = lastLocation;
+  if (!l?.place && l?.lat == null) return '';
+  const age = Date.now() - (l.at ?? 0);
+  const where = l.place || `พิกัด ${(+l.lat).toFixed(4)}, ${(+l.lon).toFixed(4)}`;
+  return `${where}${l.acc ? ` (คลาดเคลื่อน ~${Math.round(l.acc)} ม.)` : ''} · อัปเดต ${hhmm(l.at)}${age > 6 * 3600e3 ? ' (นานแล้ว อาจย้ายที่แล้ว)' : ''}`;
+}
+/** แอปที่ผู้ใช้ใช้อยู่ตรงหน้า + แอปที่เปิดอยู่ (lsappinfo ไม่ต้องขอสิทธิ์) */
+async function activity() {
+  const name = async (asn) => ((await sh('/usr/bin/lsappinfo', ['info', '-only', 'name', asn])).match(/="(.*)"/)?.[1] ?? '');
+  const front = await name((await sh('/usr/bin/lsappinfo', ['front'])).trim());
+  const asns = (await sh('/usr/bin/lsappinfo', ['visibleProcessList'])).match(/ASN:0x[0-9a-f]+-0x[0-9a-f]+/g) ?? [];
+  const apps = (await Promise.all(asns.slice(0, 15).map(name))).filter((n) => n && n !== front && !/^(Finder|Friday)$/.test(n));
+  return { front, apps };
+}
+
 async function context() {
   const memory = (await readText(MEMORY)).trim().split('\n').slice(-60).join('\n');
+  const profile = (await readText(PROFILE)).trim();
+  const act = await activity().catch(() => ({ front: '', apps: [] }));
   const since = Date.now() - 3 * 86400e3;
   const recent = (await readText(CHAT)).trim().split('\n')
     .filter((l) => Date.parse(l.slice(0, 20)) > since).slice(-12)   // 30 บรรทัด = ~1.2k token ทุกรอบคุย → 12 พอจำบริบทล่าสุด (ลดค่าใช้จ่าย 8 ต.ค.)
     .map((l) => l.replace(/^(\S+)T(\d\d:\d\d)\S* \| /, '$1 $2 ')).join('\n');
   const shortcuts = (JSON.parse(await readText(join(PUBLIC, 'config.json')) || '{}').shortcutsAllowed ?? []).join(', ');
-  return { memory, recent, shortcuts };
+  return { memory, recent, shortcuts, profile, location: locationText(), front: act.front, apps: act.apps.join(', ') };
 }
 
 const VAULT_EXCLUDE_DEFAULT = 'secret|password|credential|wallet|private-key';
@@ -523,7 +547,9 @@ const serverTools = {
     const gb = (kb) => `${Math.round(kb / 1024 / 1024)}GB`;
     const batt = (await sh('/usr/bin/pmset', ['-g', 'batt'])).match(/(\d+)%;\s*([\w ]+)/);
     return { ok: true, datetime: now, disk: k.length > 4 ? `ทั้งหมด ${gb(+k[1])} ใช้ไป ${gb(+k[1] - +k[3])} เหลือ ${gb(+k[3])} (ใช้ไป ${Math.round((1 - +k[3] / +k[1]) * 100)}%)` : 'ไม่ทราบ',
-             battery: batt ? `${batt[1]}% (${batt[2].trim()})` : 'ไม่มีข้อมูล', uptime: (await sh('/usr/bin/uptime', [])).trim() };
+             battery: batt ? `${batt[1]}% (${batt[2].trim()})` : 'ไม่มีข้อมูล', uptime: (await sh('/usr/bin/uptime', [])).trim(),
+             location: locationText() || 'ยังไม่รู้ตำแหน่ง (ให้ถามผู้ใช้ ห้ามเดา)', wifi: lastLocation?.wifi || 'ไม่ทราบ',
+             ...await activity().then((a) => ({ front_app: a.front || 'ไม่ทราบ', open_apps: a.apps.join(', ') })).catch(() => ({})) };
   },
   // Apple Shortcuts (คุมบ้านผ่าน HomePod mini / Apple Home) — เฉพาะชื่อใน config.shortcutsAllowed
   run_shortcut: async ({ name }) => {
@@ -757,6 +783,13 @@ http.createServer(async (req, res) => {
       }
       if (req.method === 'POST' && url.pathname === '/api/token') return json(res, 200, { token: await getToken() });
       if (req.method === 'GET' && url.pathname === '/api/context') return json(res, 200, await context());
+      if (req.method === 'POST' && url.pathname === '/api/location') {   // แอป Mac ส่งตำแหน่งมา (CoreLocation + ชื่อย่าน/อำเภอ)
+        const b = await readBody(req);
+        if (!(Number.isFinite(+b.lat) && Number.isFinite(+b.lon))) return json(res, 400, { error: 'lat/lon required' });
+        lastLocation = { lat: +b.lat, lon: +b.lon, acc: +b.acc || null, place: String(b.place || '').slice(0, 120), wifi: String(b.wifi || '').slice(0, 64), at: Date.now() };
+        await mkdir(DATA, { recursive: true }); await writeFile(LOCATION, JSON.stringify(lastLocation));
+        return json(res, 200, { ok: true });
+      }
       if (req.method === 'GET' && url.pathname === '/api/usage') return json(res, 200, await usageSummary());
       if (req.method === 'POST' && url.pathname === '/api/usage') {
         const u = await readBody(req);

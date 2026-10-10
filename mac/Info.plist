@@ -12,6 +12,8 @@
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
   <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
+  <key>NSLocationUsageDescription</key><string>Friday ใช้ตำแหน่งคร่าวๆ (ย่าน/อำเภอ) เพื่อตอบเรื่อง "แถวนี้" เช่น หาร้านอาหาร อากาศ และบอกชื่อ Wi-Fi ที่ต่ออยู่</string>
+  <key>NSLocationWhenInUseUsageDescription</key><string>Friday ใช้ตำแหน่งคร่าวๆ (ย่าน/อำเภอ) เพื่อตอบเรื่อง "แถวนี้" เช่น หาร้านอาหาร อากาศ และบอกชื่อ Wi-Fi ที่ต่ออยู่</string>
   <key>NSMicrophoneUsageDescription</key><string>Friday ใช้ไมค์เพื่อฟังคำปลุก "Friday" และคุยกับคุณ (ประมวลคำปลุกในเครื่อง)</string>
   <key>CFBundleURLTypes</key><array><dict>
     <key>CFBundleURLName</key><string>com.kron.friday</string>

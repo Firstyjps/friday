@@ -28,6 +28,7 @@ final class FridayController: ObservableObject {
     var onWantsPanel: ((Bool) -> Void)?
 
     private let audio = AudioIO()
+    private let location = LocationProvider()
     private var live: LiveSession?
     private var config: ServerAPI.Config?
     private var affirm: NSRegularExpression?
@@ -110,6 +111,7 @@ final class FridayController: ObservableObject {
                 catch { Log.write("start: config error \(error)"); try? await Task.sleep(for: .seconds(2)) }
             }
             applyConfig(config!)
+            location.start()
             audio.onMic = { [weak self] chunk in Task { @MainActor in self?.onMic(chunk) } }
             audio.onSpeakingChanged = { [weak self] s in Task { @MainActor in
                 self?.speaking = s; self?.lastActivity = Date()
@@ -304,6 +306,7 @@ final class FridayController: ObservableObject {
         Task {
             do {
                 if let fresh = try? await ServerAPI.config(timeout: 2) { applyConfig(fresh) }   // ค่าล่าสุดจากหน้า Settings
+                location.refresh()                                // ตำแหน่งล่าสุด (ไม่รอ — ใช้ค่าที่ server มีอยู่ในรอบนี้)
                 let config = self.config ?? config
                 let cascade = config.engine == "cascade"          // cascade ไม่ต้องใช้ token ของ Gemini Live
                 async let tokenReq = cascade ? "" : ServerAPI.token()

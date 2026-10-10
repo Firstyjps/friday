@@ -130,6 +130,10 @@ enum ServerAPI {
         _ = try? await request("/api/location", method: "POST", json: ["lat": lat, "lon": lon, "acc": acc, "place": place, "wifi": wifi], timeout: 10)
     }
 
+    static func calendar(_ events: [String]) async {
+        _ = try? await request("/api/calendar", method: "POST", json: ["events": events], timeout: 10)
+    }
+
     static func contextText() async -> String {
         guard let data = try? await request("/api/context"),
               let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return "" }
@@ -139,6 +143,7 @@ enum ServerAPI {
         if let sc = o["shortcuts"] as? String, !sc.isEmpty { out += "\n\nShortcuts ที่สั่งได้: \(sc)" }
         // รู้จักผู้ใช้: โปรไฟล์ (data/profile.md) + อยู่ไหน + กำลังทำอะไร — 10 ต.ค. Friday เดาที่อยู่ผู้ใช้เอง
         if let p = o["profile"] as? String, !p.isEmpty { out += "\n\nเกี่ยวกับผู้ใช้:\n\(p)" }
+        if let cal = o["calendar"] as? String, !cal.isEmpty { out += "\n\n[นัดหมาย]\n\(cal)" }
         let loc = o["location"] as? String ?? ""
         out += "\n\n[ตำแหน่งตอนนี้] \(loc.isEmpty ? "ยังไม่รู้ — ถ้าต้องใช้ ให้ถามผู้ใช้ ห้ามเดา" : loc)"
         if let f = o["front"] as? String, !f.isEmpty {

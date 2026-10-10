@@ -425,6 +425,8 @@ const today = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Ban
 /// ส่งให้ Friday ตอนเริ่มคุย: ความจำ + บทสนทนาล่าสุด 3 วัน
 // ---------- ผู้ใช้อยู่ไหน / ทำอะไรอยู่ ----------
 let lastLocation = null;
+let calendarEvents = { lines: [], at: 0 };       // นัดวันนี้–พรุ่งนี้จากแอป Mac (EventKit) — เก็บในหน่วยความจำเท่านั้น
+const calendarText = () => (calendarEvents.at && Date.now() - calendarEvents.at < 6 * 3600e3 ? (calendarEvents.lines.join('\n') || 'ไม่มีนัดวันนี้–พรุ่งนี้') : '');
 readText(LOCATION).then((t) => { try { lastLocation = JSON.parse(t); } catch {} });
 const hhmm = (ms) => new Date(ms).toLocaleTimeString('th-TH', { timeZone: 'Asia/Bangkok', hour: '2-digit', minute: '2-digit' });
 function locationText() {
@@ -452,7 +454,7 @@ async function context() {
     .filter((l) => Date.parse(l.slice(0, 20)) > since).slice(-12)   // 30 บรรทัด = ~1.2k token ทุกรอบคุย → 12 พอจำบริบทล่าสุด (ลดค่าใช้จ่าย 8 ต.ค.)
     .map((l) => l.replace(/^(\S+)T(\d\d:\d\d)\S* \| /, '$1 $2 ')).join('\n');
   const shortcuts = (JSON.parse(await readText(join(PUBLIC, 'config.json')) || '{}').shortcutsAllowed ?? []).join(', ');
-  return { memory, recent, shortcuts, profile, location: locationText(), front: act.front, apps: act.apps.join(', ') };
+  return { memory, recent, shortcuts, profile, location: locationText(), front: act.front, apps: act.apps.join(', '), calendar: calendarText() };
 }
 
 const VAULT_EXCLUDE_DEFAULT = 'secret|password|credential|wallet|private-key';
@@ -549,6 +551,7 @@ const serverTools = {
     return { ok: true, datetime: now, disk: k.length > 4 ? `ทั้งหมด ${gb(+k[1])} ใช้ไป ${gb(+k[1] - +k[3])} เหลือ ${gb(+k[3])} (ใช้ไป ${Math.round((1 - +k[3] / +k[1]) * 100)}%)` : 'ไม่ทราบ',
              battery: batt ? `${batt[1]}% (${batt[2].trim()})` : 'ไม่มีข้อมูล', uptime: (await sh('/usr/bin/uptime', [])).trim(),
              location: locationText() || 'ยังไม่รู้ตำแหน่ง (ให้ถามผู้ใช้ ห้ามเดา)', wifi: lastLocation?.wifi || 'ไม่ทราบ',
+             calendar: calendarText() || 'ยังไม่ได้เชื่อมปฏิทิน',
              ...await activity().then((a) => ({ front_app: a.front || 'ไม่ทราบ', open_apps: a.apps.join(', ') })).catch(() => ({})) };
   },
   // Apple Shortcuts (คุมบ้านผ่าน HomePod mini / Apple Home) — เฉพาะชื่อใน config.shortcutsAllowed
@@ -783,6 +786,11 @@ http.createServer(async (req, res) => {
       }
       if (req.method === 'POST' && url.pathname === '/api/token') return json(res, 200, { token: await getToken() });
       if (req.method === 'GET' && url.pathname === '/api/context') return json(res, 200, await context());
+      if (req.method === 'POST' && url.pathname === '/api/calendar') {   // แอป Mac ส่งนัดวันนี้–พรุ่งนี้มา (ไม่ log ชื่อนัด)
+        const b = await readBody(req);
+        calendarEvents = { lines: (Array.isArray(b.events) ? b.events : []).slice(0, 20).map((e) => String(e).slice(0, 160)), at: Date.now() };
+        return json(res, 200, { ok: true });
+      }
       if (req.method === 'POST' && url.pathname === '/api/location') {   // แอป Mac ส่งตำแหน่งมา (CoreLocation + ชื่อย่าน/อำเภอ)
         const b = await readBody(req);
         if (!(Number.isFinite(+b.lat) && Number.isFinite(+b.lon))) return json(res, 400, { error: 'lat/lon required' });

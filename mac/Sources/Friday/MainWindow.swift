@@ -114,7 +114,21 @@ struct Sidebar: View {
             Spacer(minLength: 12)
             item(.settings)
             item(.help)
+            quitItem
         }
+    }
+
+    /// ปิด Friday ทั้งแอป (เหมือนเมนู "ปิด Friday" บนไอคอนจิ้งจอก — ใช้เมื่อไอคอนโดนรอยบากจอบัง)
+    private var quitItem: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "power").font(.system(size: 15, weight: .medium))
+                .foregroundStyle(T.navIcon).frame(width: 20, height: 20)
+            Text("Quit Friday").font(T.f(15)).foregroundStyle(T.ink)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14).frame(height: 40)
+        .contentShape(Rectangle())
+        .tap { Log.write("quit: ปุ่ม Quit ในหน้าต่าง"); NSApp.terminate(nil) }
     }
 
     private func item(_ p: MainUI.Page) -> some View {

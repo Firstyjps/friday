@@ -85,6 +85,7 @@ struct OverlayView: View {
                 Text(status(m)).font(.system(size: 12)).foregroundStyle(.white.opacity(0.45))
                 Spacer(minLength: 0)
                 micButton
+                quitButton
             }
             if !c.lastMe.isEmpty {
                 Text(c.lastMe)
@@ -148,6 +149,23 @@ struct OverlayView: View {
         .animation(.easeOut(duration: 0.15), value: ui.hover)
         .onHover { ui.setHover("mic", $0) }
         .help(c.micMuted ? "เปิดไมค์" : "ปิดไมค์ชั่วคราว")
+    }
+
+    /// ปิด Friday ทั้งแอป — ทางออกที่เห็นเสมอตอนคุย (ไอคอนจิ้งจอกบนเมนูบาร์อาจโดนรอยบากจอบัง)
+    private var quitButton: some View {
+        Button { Log.write("quit: ปุ่ม ⏻ บน overlay"); NSApp.terminate(nil) } label: {
+            Image(systemName: "power")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.white.opacity(ui.hover == "quit" ? 0.95 : 0.8))
+                .frame(width: 30, height: 30)
+                .background(Color.white.opacity(ui.hover == "quit" ? 0.16 : 0.07), in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .scaleEffect(ui.hover == "quit" ? 1.08 : 1)
+        .animation(.easeOut(duration: 0.15), value: ui.hover)
+        .onHover { ui.setHover("quit", $0) }
+        .help("ปิด Friday")
     }
 
     // ---------- แผงยืนยัน ----------

@@ -24,7 +24,7 @@ test('Tuya: ขอ token ครั้งเดียว · หาฉากตา
   const t = new Tuya({ id: 'cid', secret: 'sec', uid: 'u1', endpoint: 'https://x.test', fetch: fakeCloud(calls) });
   assert.equal((await t.trigger('เปิดแอร์')).scene_id, 'sA');
   assert.equal(await t.trigger('เปิดไฟ'), null);                 // ไม่มีฉากนี้ → null ให้ไปใช้ shortcuts แทน
-  assert.deepEqual(calls, ['GET /v1.0/token?grant_type=1', 'GET /v1.0/users/u1/homes', 'GET /v1.1/homes/7/scenes', 'POST /v1.0/homes/7/scenes/sA/trigger']);
+  assert.deepEqual(calls, ['GET /v1.0/token?grant_type=1', 'GET /v1.0/users/u1/homes', 'GET /v1.0/homes/7/scenes', 'POST /v1.0/homes/7/scenes/sA/trigger']);
 });
 
 test('Tuya: error จาก cloud → throw · ไม่มี env → null', async () => {

@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import CoreAudio
 import ObjCTry
@@ -75,9 +76,16 @@ final class AudioIO {
         if !listening {
             listening = true
             AudioDevices.onChange { [weak self] in self?.scheduleReselect() }
+            // ตื่นจาก sleep: CoreAudio มักทิ้ง engine เดิมไว้เงียบๆ (26 ต.ค. ตื่นแล้วหูหนวกทั้งคืน) → เคลียร์ไมค์ที่พักไว้แล้วเลือกใหม่ทันที
+            NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+                Log.write("audio: เครื่องตื่นจาก sleep → เลือกอุปกรณ์ใหม่")
+                self?.stallStreak = 0
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self?.scheduleReselect(force: true) }
+            }
             startWatchdog()
         }
         building = true; defer { building = false }
+        failed = true          // started() ตั้งกลับเป็น false · throw ระหว่างทาง → ให้ loop ของ controller วนลองเอง ตัวเฝ้าไมค์ไม่ต้องยุ่ง
         benchedInputs = benchedInputs.filter { $0.value > Date() }
         let outs = AudioDevices.candidates(input: false, priority: outputPriority)
         let ins = AudioDevices.candidates(input: true, priority: inputPriority, skip: Set(benchedInputs.keys))
@@ -118,7 +126,7 @@ final class AudioIO {
     }
 
     private func started(out: String, inp: String) {
-        outputName = out; inputName = inp
+        outputName = out; inputName = inp; failed = false
         echo.use(output: aecEnabled ? "\(out) ·aec" : out, input: inp, defaultGain: aecEnabled ? 0.15 : 0.6)
         Log.write("audio: 🔊 \(out) · 🎤 \(inp) · aec=\(aecEnabled) · airplay=\(outputAirPlay)")
         onDevicesChanged?()
@@ -248,12 +256,12 @@ final class AudioIO {
     }
 
     /// เสียบ/ถอดอุปกรณ์ → รอให้นิ่ง 1 วิ แล้วค่อยดูว่ามีตัวที่ดีกว่าไหม (กันวนตอน macOS สร้างอุปกรณ์ชั่วคราว)
-    private func scheduleReselect() {
+    private func scheduleReselect(force: Bool = false) {
         onHardwareChange?()
         benchedInputs = [:]              // เสียบ/ถอดอุปกรณ์ → ให้โอกาสไมค์ที่เคยพักไว้อีกครั้ง
         guard !building else { return }
         pendingReselect?.cancel()
-        let w = DispatchWorkItem { [weak self] in self?.reselect(force: false) }
+        let w = DispatchWorkItem { [weak self] in self?.reselect(force: force) }
         pendingReselect = w
         DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: w)
     }
@@ -272,15 +280,19 @@ final class AudioIO {
     // ---------- ตัวเฝ้าไมค์ค้าง ----------
     // 9 ต.ค.: ไมค์ส่งเสียงได้ ~1–2 นาทีแล้วเงียบไปเฉยๆ (engine ยังบอกว่าวิ่งอยู่ ไม่มี error) ตอนเสียงออก AirPlay → แอปไม่ได้ยินอะไรเลย
     // ไม่รู้สาเหตุแน่ชัด จึงเฝ้า: ถ้าไม่มี buffer จากไมค์เกิน 4 วิ → สร้าง engine ไมค์ใหม่ (ไม่แตะลำโพง เสียงที่กำลังพูดไม่ขาด)
-    private var lastTap = -1, stalledSec = 0, restarts = 0
+    // 26–27 ต.ค.: เปิดใหม่แล้วก็ยังเงียบ วนทุก 4 วิ ~8,500 ครั้งข้ามคืน → ค้างซ้ำติดกันให้รอนานขึ้น 4→8→16→32→60 วิ ได้เสียงเมื่อไหร่กลับเป็น 4
+    // ระหว่างเปิดระบบเสียงไม่สำเร็จ (failed) controller วนลองเองอยู่แล้ว → ไม่ซ้อน
+    private var lastTap = -1, stalledSec = 0, restarts = 0, stallStreak = 0
+    private var failed = false
     private func startWatchdog() {
         Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-            guard let self, !self.building, !self.inputPaused else { self?.stalledSec = 0; return }
+            guard let self, !self.building, !self.inputPaused, !self.failed else { self?.stalledSec = 0; return }
             let now = self.tapCount
-            if now == self.lastTap { self.stalledSec += 2 } else { self.stalledSec = 0; self.lastTap = now }
-            guard self.stalledSec >= 4 else { return }
-            self.stalledSec = 0; self.restarts += 1
-            Log.write("audio: ไมค์ค้าง (ไม่มีเสียงเข้า 4 วิ, ครั้งที่ \(self.restarts)) → เปิดไมค์ใหม่")
+            if now == self.lastTap { self.stalledSec += 2 } else { self.stalledSec = 0; self.stallStreak = 0; self.lastTap = now }
+            let limit = min(60, 4 << min(self.stallStreak, 4))
+            guard self.stalledSec >= limit else { return }
+            self.stalledSec = 0; self.restarts += 1; self.stallStreak += 1
+            Log.write("audio: ไมค์ค้าง (ไม่มีเสียงเข้า \(limit) วิ, ครั้งที่ \(self.restarts)) → เปิดไมค์ใหม่")
             self.restartInput()
         }
     }

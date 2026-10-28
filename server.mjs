@@ -289,8 +289,11 @@ async function detectWake(pcm) {
   whisperMs = whisperMs == null ? Date.now() - t0 : Math.round(whisperMs * 0.8 + (Date.now() - t0) * 0.2);
   let d = wakeDecision(text), plain = null;
   if (d.wake === null) { plain = await whisperText(wav, null, 5000).catch(() => ''); d = wakeDecision(text, plain); }
+  if (d.wake) lastWake = { at: Date.now(), cmd: plain == null };
   return { text, plain, wake: !!d.wake, phrase: d.phrase ?? '', echo: !d.wake && !!d.why, why: d.why ?? '' };
 }
+// คำปลุกล่าสุดที่ผ่าน: cmd = รอบแรกได้ "ฟรายเดย์ + คำต่อท้าย" (ไม่ผ่านรอบสอง) → ส่งต่อให้ cascade ใช้ตัดสินตอน Scribe ได้ว่าง
+let lastWake = { at: 0, cmd: false };
 
 // ข้อความสดระหว่างผู้ใช้พูด (แอป Mac โหมด cascade) — whisper ในเครื่อง ~0.4 วิ/ประโยค ไว้โชว์บน overlay อย่างเดียว
 // ข้อความจริงที่ใช้คุย/เช็คคำยืนยันยังเป็น Scribe ตอนพูดจบเหมือนเดิม
@@ -849,6 +852,7 @@ http.createServer(async (req, res) => {
           ? { audio: await readRaw(req, 3_000_000) } : await readBody(req);
         // คลิปแรกหลังคำปลุก → ยืนยันด้วย Scribe ก่อนตอบ: 1 = ต้องมีคำปลุก · 2 = คลิปถัดจากที่ได้ยินแค่คำปลุก ต้องมีคำพูดจริง
         const w = url.searchParams.get('wake'); if (w === '1' || w === '2') input.wake = w === '2' ? 'speech' : 'word';
+        if (input.wake === 'word' && lastWake.cmd && Date.now() - lastWake.at < 20_000) input.wakeCmd = true;
         res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-cache' });
         const emit = (o) => { if (!res.writableEnded) res.write(JSON.stringify(o) + '\n'); };
         const cut = new AbortController();                                   // แอปตัดสาย (ผู้ใช้พูดแทรก) → หยุดรอบนี้ ไม่ทำเสียงที่เหลือ

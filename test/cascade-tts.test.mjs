@@ -65,12 +65,12 @@ test('filler: ทำเสียงไม่ได้ → ไม่จำผล�
 const geminiOrTts = async (url) => (/flash-lite:stream/.test(String(url))
   ? new Response(`data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: 'ได้ค่ะ' }] } }], usageMetadata: {} })}\n\n`)
   : audioSSE());
-const wakeTurn = async (heard, wake = 'word') => {
+const wakeTurn = async (heard, wake = 'word', wakeCmd = false) => {
   globalThis.fetch = geminiOrTts;
   const c = new Cascade({ key: 'test', log: () => {}, wav16k: (p) => p, scribe: async () => { if (heard instanceof Error) throw heard; return heard; } });
   c.open('s1', { system: '', cfg: { cascade: { filler: false, googleSearch: false, ttsModels: ['m-a'] }, tools: [] } });
   const ev = [];
-  await c.turn('s1', { audio: Buffer.alloc(32000), wake }, (o) => ev.push(o));
+  await c.turn('s1', { audio: Buffer.alloc(32000), wake, wakeCmd }, (o) => ev.push(o));
   return ev;
 };
 
@@ -85,6 +85,12 @@ test('ได้ยินแค่คำปลุก (Scribe ถอด "Friday" �
   assert.deepEqual(await wakeTurn(''), [{ t: 'done', pending: 0, wakeRetry: true }]);
   const ev = await wakeTurn('เปิด Chrome ให้หน่อย', 'speech');     // คำสั่งที่พูดตามมา (ไม่มีคำปลุก) ต้องตอบ
   assert.equal(ev[0].t, 'user'); assert.ok(ev.some((o) => o.t === 'text'));
+});
+
+test('whisper ได้ "ฟรายเดย์ + คำต่อท้าย" แต่ Scribe ได้ว่าง = เพลงหลอน → ตื่นผิด ไม่รอฟังต่อ (28 ต.ค.)', async () => {
+  assert.deepEqual(await wakeTurn('', 'word', true), [{ t: 'done', pending: 0, falseWake: true }]);
+  const ev = await wakeTurn('ฟรายเดย์ เปิดเพลงหน่อย', 'word', true);     // คนเรียกจริง Scribe ได้ยิน → ตอบตามปกติ
+  assert.ok(ev.some((o) => o.t === 'text'));
 });
 
 test('ปลุกจริง: ข้อความผู้ใช้ออกก่อนคำตอบ แล้วตามด้วยเสียงและ done', async () => {

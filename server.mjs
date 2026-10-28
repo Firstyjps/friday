@@ -12,6 +12,7 @@ import { decide as policyDecide, secretCheck, hardDeny, ruleKey, RuleStore } fro
 import { speak as homepodSpeak, askText } from './lib/homepod.mjs';
 import { synth, ttsEnabled } from './lib/tts.mjs';
 import { Cascade } from './lib/cascade.mjs';
+import { Tuya } from './lib/tuya.mjs';
 import { JobLog, parseChat, chatLines, originFor, usageReport, vaultProjects, logTail, memoryNotes, forgetNote, applySettings, effectiveConfig } from './lib/dashboard.mjs';
 
 const PORT = Number(process.env.PORT || 4850);
@@ -521,6 +522,7 @@ async function condenseMemory() {
 }
 setTimeout(condenseMemory, 5 * 60e3); setInterval(condenseMemory, 6 * 3600e3);
 
+const tuya = Tuya.fromEnv();
 const serverTools = {
   remember: async ({ note }) => {
     if (!note) return { ok: false };
@@ -574,6 +576,11 @@ const serverTools = {
     return r;
   },
 };
+    // มีฉากชื่อเดียวกันใน Smart Life → สั่งผ่าน Tuya Cloud (Shortcut ของ Smart Life รันบน Mac ไม่ได้ถ้าไม่มีแอป) · ไม่มี/ล่ม → shortcuts เหมือนเดิม
+    if (tuya) {
+      try { if (await tuya.trigger(n)) { log(`SHORTCUT ผ่าน Tuya | ${n}`); return { ok: true, result: `สั่ง "${n}" แล้ว` }; } }
+      catch (e) { log(`SHORTCUT Tuya ผิดพลาด | ${n} | ${e.message}`); }
+    }
 
 // ---------- HomePod: (C) พูดออกลำโพง · (B) "หวัดดี Siri เลขาส่วนตัว" ----------
 // config.json เสีย/อ่านไม่ได้ → ใช้ค่าล่าสุดที่อ่านได้ (เดิม JSON.parse throw ใน .then ที่ไม่มี catch → server ดับวนตอนบูต)
